@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Локальный журнал обработанных накладных (создаётся скриптом)
+.vitebsk_processed.json
+
+# Результаты прогонов / временные файлы
+*_Обработано.xlsx
+*_Обработано\ (*).xlsx
+samples/out_*.xlsx
+.DS_Store
+Thumbs.db
