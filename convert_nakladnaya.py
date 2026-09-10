@@ -84,6 +84,25 @@ _OBOI_REVERSE_PAIRS = {
 
 
 # ===========================================================================
+# ЖУРНАЛ СООБЩЕНИЙ
+# ===========================================================================
+_log_sink = None
+
+
+def set_log_sink(fn):
+    """Перенаправляет сообщения скрипта (GUI подставляет сюда своё окно)."""
+    global _log_sink
+    _log_sink = fn
+
+
+def log(msg="", level="info"):
+    if _log_sink is not None:
+        _log_sink(str(msg), level)
+    else:
+        print(msg)
+
+
+# ===========================================================================
 # ВСПОМОГАТЕЛЬНЫЕ (общие)
 # ===========================================================================
 def norm_num(v):
@@ -108,8 +127,20 @@ def pervoe_slovo(text):
     return s.split()[0]
 
 
-def script_dir():
+def app_dir():
+    """Папка приложения: рядом с .exe при onefile-сборке, иначе рядом со скриптом."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def bundle_dir():
+    """Папка с ресурсами, вшитыми в onefile-сборку (справочник по умолчанию)."""
+    return getattr(sys, "_MEIPASS", app_dir())
+
+
+def script_dir():
+    return app_dir()
 
 
 def sanitize_dlya_imeni(text):
@@ -370,14 +401,14 @@ def convert_vitebsk(src_path, out_path=None):
     if out_path is None:
         out_path = postroit_imya_rezultata_vitebsk(src_path)
 
-    print(f"Файл: {os.path.basename(src_path)}  [Витебск]")
-    print("Обнаружено:")
+    log(f"Файл: {os.path.basename(src_path)}  [Витебск]", "head")
+    log("Обнаружено:")
     for label, cnt in sorted(counts.items(), key=lambda x: -x[1]):
-        print(f"  - {label}: {cnt} стр.")
+        log(f"  - {label}: {cnt} стр.")
     if len(kollekcii) > 1:
-        print("В файле несколько коллекций сразу — все они попадут в один")
-        print(f"итоговый файл: {', '.join(kollekcii)}")
-    print()
+        log("В файле несколько коллекций сразу — все они попадут в один")
+        log(f"итоговый файл: {', '.join(kollekcii)}")
+    log()
 
     wb_out = Workbook()
     ws = wb_out.active
@@ -404,9 +435,18 @@ def convert_vitebsk(src_path, out_path=None):
 # ===========================================================================
 # ОБОИ (УПД)
 # ===========================================================================
+def oboi_catalog_path(folder=None):
+    """Свой справочник рядом с приложением важнее вшитого в сборку."""
+    if folder is not None:
+        return os.path.join(folder, OBOI_CATALOG_FILENAME)
+    external = os.path.join(app_dir(), OBOI_CATALOG_FILENAME)
+    if os.path.exists(external):
+        return external
+    return os.path.join(bundle_dir(), OBOI_CATALOG_FILENAME)
+
+
 def load_oboi_catalog(folder=None):
-    folder = folder or script_dir()
-    path = os.path.join(folder, OBOI_CATALOG_FILENAME)
+    path = oboi_catalog_path(folder)
     if not os.path.exists(path):
         return {}
     try:
@@ -417,7 +457,7 @@ def load_oboi_catalog(folder=None):
 
 
 def save_oboi_catalog(catalog, folder=None):
-    folder = folder or script_dir()
+    folder = folder or app_dir()
     path = os.path.join(folder, OBOI_CATALOG_FILENAME)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(catalog, f, ensure_ascii=False, indent=2)
@@ -739,13 +779,14 @@ def convert_oboi(src_path, out_path=None, catalog=None):
     if out_path is None:
         out_path = postroit_imya_rezultata_oboi(src_path)
 
-    print(f"Файл: {os.path.basename(src_path)}  [Обои / УПД]")
-    print(f"Обнаружено строк: {len(raw_rows)}")
-    print(f"  - по справочнику oboi_catalog.json: {known}")
+    log(f"Файл: {os.path.basename(src_path)}  [Обои / УПД]", "head")
+    log(f"Обнаружено строк: {len(raw_rows)}")
+    log(f"  - по справочнику oboi_catalog.json: {known}")
     if unknown:
-        print(f"  - эвристика (артикул не в справочнике): {unknown}")
-        print("    Добавьте эталон через: python convert_nakladnaya.py --learn-oboi \"файл готовый.xlsx\"")
-    print()
+        log(f"  - эвристика (артикул не в справочнике): {unknown}", "warn")
+        log("    Проверьте эти позиции: короткое имя подобрано автоматически,", "warn")
+        log("    код номенклатуры остался пустым.", "warn")
+    log()
 
     wb_out = Workbook()
     ws = wb_out.active
@@ -832,8 +873,8 @@ def learn_oboi_catalog_from_gotovyj(path, folder=None):
 
     wb.close()
     save_oboi_catalog(catalog, folder)
-    print(f"Справочник обоев: +{added} новых, {updated} обновлено, всего {len(catalog)}")
-    print(f"Файл: {os.path.join(folder, OBOI_CATALOG_FILENAME)}")
+    log(f"Справочник обоев: +{added} новых, {updated} обновлено, всего {len(catalog)}", "ok")
+    log(f"Файл: {os.path.join(folder, OBOI_CATALOG_FILENAME)}")
     return catalog
 
 
@@ -877,7 +918,9 @@ def opredelit_tip_faila(path):
 
 
 def find_source_files(folder=".", state=None):
+    """Новые накладные в папке. Возвращает (список (путь, тип), уже обработанные)."""
     candidates = []
+    already = []
     for name in sorted(os.listdir(folder)):
         low = name.lower()
         if not (low.endswith(".xls") or low.endswith(".xlsx")):
@@ -887,12 +930,10 @@ def find_source_files(folder=".", state=None):
         if tip == "skip":
             continue
         if state is not None and name in state:
-            prev = state[name]
-            print(f"Пропускаю (уже обработан {prev.get('processed_at', '?')}, "
-                  f"результат {prev.get('out_file', '?')}): {name}")
+            already.append((name, state[name]))
             continue
         candidates.append((path, tip))
-    return candidates
+    return candidates, already
 
 
 def convert_any(src_path, out_path=None):
@@ -913,78 +954,183 @@ def convert_any(src_path, out_path=None):
     raise ValueError(f"Не удалось определить тип: {src_path}")
 
 
-if __name__ == "__main__":
-    raw_args = sys.argv[1:]
+def zapisat_v_zhurnal(folder_state, state, src_name, out_path, rows, tip):
+    state[src_name] = {
+        "processed_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "out_file": os.path.basename(out_path),
+        "rows": rows,
+        "type": tip,
+    }
+    save_state(folder_state, state)
+
+
+# ===========================================================================
+# Точки входа для GUI и командной строки
+# ===========================================================================
+def process_folder(folder=None, force=False):
+    """
+    Обрабатывает все новые накладные в папке. Пишет ход работы через log()
+    и возвращает сводку для показа пользователю.
+    """
+    folder = os.path.abspath(folder or app_dir())
+    started = datetime.datetime.now()
+    itog = {
+        "folder": folder,
+        "done": [],
+        "skipped": [],
+        "errors": [],
+        "rows": 0,
+        "seconds": 0.0,
+    }
+
+    if not os.path.isdir(folder):
+        log(f"Папка не найдена: {folder}", "err")
+        itog["errors"].append(("", f"Папка не найдена: {folder}"))
+        return itog
+
+    log(f"Папка: {folder}")
+    catalog = load_oboi_catalog()
+    log(f"Справочник обоев: {len(catalog)} артикулов")
+    if force:
+        log("Режим повторной обработки: журнал обработанных файлов игнорируется.", "warn")
+    log()
+
+    state = load_state(folder)
+    sources, already = find_source_files(folder, state=None if force else state)
+
+    for name, prev in already:
+        itog["skipped"].append((name, prev))
+        log(f"Пропускаю (обработан {prev.get('processed_at', '?')} -> "
+            f"{prev.get('out_file', '?')}): {name}")
+    if already:
+        log()
+
+    if not sources:
+        log("Новых накладных (.xls / .xlsx) в этой папке нет.", "warn")
+        log("Витебские ковры: положите .xls рядом с приложением.")
+        log("Обои: положите сырой УПД .xlsx (со словом «Обои» в наименованиях).")
+        if already:
+            log("Чтобы обработать файлы заново, включите «Обрабатывать повторно».")
+        itog["seconds"] = (datetime.datetime.now() - started).total_seconds()
+        return itog
+
+    log(f"К обработке: {len(sources)} файл(ов)", "head")
+    log()
+
+    for i, (src_path, tip) in enumerate(sources, start=1):
+        src_name = os.path.basename(src_path)
+        log(f"[{i}/{len(sources)}] {src_name}", "head")
+        try:
+            if tip == "vitebsk":
+                rows, out_path = convert_vitebsk(src_path)
+            else:
+                rows, out_path = convert_oboi(src_path, catalog=catalog)
+        except Exception as exc:
+            itog["errors"].append((src_name, str(exc)))
+            log(f"ОШИБКА: {exc}", "err")
+            log()
+            continue
+
+        itog["done"].append({
+            "src": src_name,
+            "out": out_path,
+            "rows": rows,
+            "type": tip,
+        })
+        itog["rows"] += rows
+        log(f"Готово: {rows} строк -> {os.path.basename(out_path)}", "ok")
+        zapisat_v_zhurnal(folder, state, src_name, out_path, rows, tip)
+        log("-" * 60)
+
+    itog["seconds"] = (datetime.datetime.now() - started).total_seconds()
+    return itog
+
+
+def process_one_file(src_path, out_path=None, force=False, folder_state=None):
+    """Обрабатывает один явно указанный файл. Возвращает такую же сводку."""
+    folder_state = os.path.abspath(folder_state or os.path.dirname(os.path.abspath(src_path)))
+    started = datetime.datetime.now()
+    itog = {
+        "folder": folder_state,
+        "done": [],
+        "skipped": [],
+        "errors": [],
+        "rows": 0,
+        "seconds": 0.0,
+    }
+    src_name = os.path.basename(src_path)
+    state = load_state(folder_state)
+
+    if not os.path.exists(src_path):
+        log(f"Файл не найден: {src_path}", "err")
+        itog["errors"].append((src_name, "файл не найден"))
+        return itog
+
+    if not force and src_name in state:
+        prev = state[src_name]
+        itog["skipped"].append((src_name, prev))
+        log(f"Этот файл уже обработан {prev.get('processed_at', '?')} -> "
+            f"{prev.get('out_file', '?')}", "warn")
+        log("Для повторной обработки добавьте --force.")
+        itog["seconds"] = (datetime.datetime.now() - started).total_seconds()
+        return itog
+
+    try:
+        rows, out_path, tip = convert_any(src_path, out_path)
+    except Exception as exc:
+        itog["errors"].append((src_name, str(exc)))
+        log(f"ОШИБКА: {exc}", "err")
+        itog["seconds"] = (datetime.datetime.now() - started).total_seconds()
+        return itog
+
+    itog["done"].append({"src": src_name, "out": out_path, "rows": rows, "type": tip})
+    itog["rows"] = rows
+    log(f"Готово: {rows} строк перенесено -> {out_path}", "ok")
+    zapisat_v_zhurnal(folder_state, state, src_name, out_path, rows, tip)
+    itog["seconds"] = (datetime.datetime.now() - started).total_seconds()
+    return itog
+
+
+def opisanie_itoga(itog):
+    """Короткая строка о результате — для статуса в GUI и финальной строки в консоли."""
+    if itog["errors"]:
+        return f"Завершено с ошибками: {len(itog['errors'])} из {len(itog['errors']) + len(itog['done'])}"
+    if itog["done"]:
+        files = len(itog["done"])
+        return f"Готово: обработано файлов — {files}, строк — {itog['rows']}"
+    if itog["skipped"]:
+        return "Новых файлов нет: все накладные уже обработаны"
+    return "Новых накладных в папке не найдено"
+
+
+def main(argv=None):
+    raw_args = list(sys.argv[1:] if argv is None else argv)
     force = "--force" in raw_args
     args = [a for a in raw_args if a not in ("--force", "--learn-oboi")]
 
-    folder = script_dir()
-    # Работаем из текущей папки, если запуск через bat из C:\Накладные
-    if os.path.isdir("."):
-        cwd = os.path.abspath(".")
-        # предпочитаем cwd, если там лежат накладные / bat
-        folder_state = cwd
-    else:
-        folder_state = folder
-
     if "--learn-oboi" in raw_args:
-        # следующий аргумент после флага — путь к эталону
         try:
             idx = raw_args.index("--learn-oboi")
             learn_path = raw_args[idx + 1]
         except Exception:
-            print("Укажите файл: python convert_nakladnaya.py --learn-oboi \"… готовый .xlsx\"")
-            sys.exit(1)
-        learn_oboi_catalog_from_gotovyj(learn_path, folder=folder)
-        sys.exit(0)
+            log("Укажите файл: python convert_nakladnaya.py --learn-oboi \"… готовый .xlsx\"", "err")
+            return 1
+        learn_oboi_catalog_from_gotovyj(learn_path, folder=app_dir())
+        return 0
 
-    state = load_state(folder_state)
+    # Накладные лежат в текущей папке (bat/exe запускаются из рабочего каталога)
+    folder_state = os.path.abspath(".")
 
-    if len(args) >= 1:
-        src_path = args[0]
-        out_path = args[1] if len(args) >= 2 else None
-        src_name = os.path.basename(src_path)
-
-        if not force and src_name in state:
-            prev = state[src_name]
-            print(f"Этот файл уже был обработан {prev.get('processed_at', '?')} "
-                  f"-> {prev.get('out_file', '?')}")
-            print("Чтобы обработать повторно, добавьте флаг --force:")
-            print(f"  python convert_nakladnaya.py \"{src_path}\" --force")
-            sys.exit(0)
-
-        n, out_path, tip = convert_any(src_path, out_path)
-        print(f"Готово: {n} строк перенесено -> {out_path}")
-
-        state[src_name] = {
-            "processed_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "out_file": os.path.basename(out_path),
-            "rows": n,
-            "type": tip,
-        }
-        save_state(folder_state, state)
+    if args:
+        itog = process_one_file(args[0], args[1] if len(args) >= 2 else None,
+                                force=force, folder_state=folder_state)
     else:
-        sources = find_source_files(folder_state, state=None if force else state)
-        if not sources:
-            print("В этой папке не найдено новых накладных (.xls / .xlsx).")
-            print("Витебск: положите .xls рядом со скриптом.")
-            print("Обои: положите сырой УПД .xlsx (с «Обои» в наименованиях).")
-            print("Указать файл явно: python convert_nakladnaya.py \"файл.xlsx\"")
-            print("Обучить справочник обоев: python convert_nakladnaya.py --learn-oboi \"готовый.xlsx\"")
-            sys.exit(0)
+        itog = process_folder(folder_state, force=force)
 
-        for src_path, tip in sources:
-            if tip == "vitebsk":
-                n, out_path = convert_vitebsk(src_path)
-            else:
-                n, out_path = convert_oboi(src_path)
-            print(f"Готово: {n} строк -> {os.path.basename(out_path)}")
-            src_name = os.path.basename(src_path)
-            state[src_name] = {
-                "processed_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "out_file": os.path.basename(out_path),
-                "rows": n,
-                "type": tip,
-            }
-            save_state(folder_state, state)
-            print("-" * 40)
+    log()
+    log(opisanie_itoga(itog), "err" if itog["errors"] else "ok")
+    return 1 if itog["errors"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
