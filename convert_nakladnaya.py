@@ -990,7 +990,11 @@ def process_folder(folder=None, force=False):
 
     log(f"Папка: {folder}")
     catalog = load_oboi_catalog()
-    log(f"Справочник обоев: {len(catalog)} артикулов")
+    if catalog:
+        log(f"Справочник обоев: {len(catalog)} артикулов")
+    else:
+        log(f"Справочник обоев не найден ({OBOI_CATALOG_FILENAME}) — короткие имена", "warn")
+        log("будут подобраны эвристикой, коды номенклатуры останутся пустыми.", "warn")
     if force:
         log("Режим повторной обработки: журнал обработанных файлов игнорируется.", "warn")
     log()

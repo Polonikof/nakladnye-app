@@ -9,12 +9,23 @@ Linux:    pyinstaller --noconfirm --clean nakladnye.spec   ->  dist/Наклад
 рядом с исполняемым файлом, приложение возьмёт её (см. oboi_catalog_path).
 """
 
+import os
+import sys
+
 BLOCK_CIPHER = None
+
+# Рантайм Visual C++ лежит рядом с python.exe. Вшиваем его, чтобы .exe
+# работал и на компьютерах без установленного «Microsoft VC++ Redistributable».
+_extra_binaries = []
+for _dll in ("vcruntime140.dll", "vcruntime140_1.dll"):
+    _p = os.path.join(os.path.dirname(sys.executable), _dll)
+    if os.path.exists(_p):
+        _extra_binaries.append((_p, "."))
 
 a = Analysis(
     ["nakladnye_app.py"],
     pathex=[],
-    binaries=[],
+    binaries=_extra_binaries,
     datas=[("oboi_catalog.json", ".")],
     hiddenimports=["xlrd", "openpyxl"],
     hookspath=[],

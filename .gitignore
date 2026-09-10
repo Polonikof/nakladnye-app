@@ -11,7 +11,10 @@ venv/
 # Сборка PyInstaller
 build/
 dist/
+build-win/
+dist-win/
 *.manifest
+diag.spec
 
 # Результаты прогонов / временные файлы
 *_Обработано.xlsx
