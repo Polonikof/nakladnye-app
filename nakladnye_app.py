@@ -105,7 +105,7 @@ class App(tk.Tk):
 
         self.messages = queue.Queue()
         self.worker = None
-        self.folder = tk.StringVar(value=core.app_dir())
+        self.folder = tk.StringVar(value=learn_novye.default_work_dir())
         self.inbox = tk.StringVar(value=learn_novye.default_novye_dir())
         self.force = tk.BooleanVar(value=False)
         self.mode_learn = False
@@ -199,24 +199,27 @@ class App(tk.Tk):
                               highlightthickness=1, bd=0)
         inbox_card.grid(row=3, column=0, sticky="ew", pady=(14, 0))
         inbox_card.columnconfigure(1, weight=1)
-        ttk.Label(inbox_card, text="Папка НовыеНакладные:",
+        ttk.Label(inbox_card, text="Новые накладные:",
                   style="CardMuted.TLabel").grid(row=0, column=0, padx=(12, 8), pady=(10, 2), sticky="w")
         ttk.Label(inbox_card, textvariable=self.inbox, style="Path.TLabel",
                   anchor="w").grid(row=0, column=1, sticky="ew", pady=(10, 2))
         ttk.Button(inbox_card, text="Выбрать…", command=self._choose_inbox,
                    width=12).grid(row=0, column=2, padx=(8, 10), pady=(8, 2))
         ttk.Label(inbox_card,
-                  text="Сюда кладут пару: исходник + готовый файл. Агент допишет справочник для нового релиза.",
+                  text="Сюда: два файла (исходник и готовый). Затем кнопка «Обучить».",
                   style="CardMuted.TLabel").grid(row=1, column=0, columnspan=3,
                                                  padx=12, pady=(0, 8), sticky="w")
 
         learn_actions = ttk.Frame(root)
         learn_actions.grid(row=4, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(learn_actions, text="Создать папку НовыеНакладные",
-                   command=self._setup_inbox).grid(row=0, column=0, sticky="w")
-        self.learn_btn = ttk.Button(learn_actions, text="Обучить из НовыеНакладные",
-                                    command=self._start_learn)
-        self.learn_btn.grid(row=0, column=1, padx=(8, 0), sticky="w")
+        self.learn_btn = tk.Button(
+            learn_actions, text="Обучить", command=self._start_learn,
+            font=self.f_btn, bg=ACCENT, fg="white",
+            activebackground=ACCENT_HOVER, activeforeground="white",
+            disabledforeground="#eef2fb", relief="flat", bd=0,
+            padx=28, pady=12, cursor="hand2",
+        )
+        self.learn_btn.grid(row=0, column=0, sticky="w")
 
         self.progress = ttk.Progressbar(root, mode="indeterminate",
                                         style="Thin.Horizontal.TProgressbar")
@@ -315,12 +318,10 @@ class App(tk.Tk):
         self._append("  • Витебские ковры — фактура .xls", "muted")
         self._append("  • Обои — сырой УПД .xlsx (со словом «Обои» в наименованиях)", "muted")
         self._append("", "muted")
-        self._append("Положите накладные в папку, указанную выше, и нажмите", "muted")
-        self._append("«Обработать файлы». Результаты появятся в той же папке", "muted")
-        self._append("с суффиксом «_Обработано».", "muted")
-        self._append("", "muted")
-        self._append("Новый формат: положите исходник и готовый файл в", "muted")
-        self._append("папку «НовыеНакладные» и нажмите «Обучить из НовыеНакладные».", "muted")
+        self._append("Две кнопки:", "muted")
+        self._append("  «Обработать файлы» — обычные накладные в C:\\Накладные", "muted")
+        self._append("  «Обучить» — два файла (исходник и готовый) в", "muted")
+        self._append("              C:\\Накладные\\НовыеНакладные", "muted")
         self._append("=" * 60)
 
     def _set_status(self, text, kind="idle"):
@@ -398,7 +399,7 @@ class App(tk.Tk):
 
         self.run_btn.configure(state="disabled", bg=ACCENT_OFF, text="Обработка…")
         try:
-            self.learn_btn.configure(state="disabled")
+            self.learn_btn.configure(state="disabled", bg=ACCENT_OFF)
         except Exception:
             pass
         self.status_box.grid_remove()
@@ -420,11 +421,11 @@ class App(tk.Tk):
             return
         folder = self.inbox.get()
         self.run_btn.configure(state="disabled", bg=ACCENT_OFF, text="Обработка…")
-        self.learn_btn.configure(state="disabled")
+        self.learn_btn.configure(state="disabled", bg=ACCENT_OFF)
         self.status_box.grid_remove()
         self.progress.grid()
         self.progress.start(12)
-        self._set_status("Агент разбирает пару файлов…", "run")
+        self._set_status("Смотрю файлы в НовыеНакладные…", "run")
         self._append("", "info")
         self._append(f"Обучение — {datetime.datetime.now():%d.%m.%Y %H:%M:%S}", "head")
         self._append("=" * 60)
@@ -460,7 +461,7 @@ class App(tk.Tk):
         self.status_box.grid()
         self.run_btn.configure(state="normal", bg=ACCENT, text="Обработать файлы")
         try:
-            self.learn_btn.configure(state="normal")
+            self.learn_btn.configure(state="normal", bg=ACCENT)
         except Exception:
             pass
 
