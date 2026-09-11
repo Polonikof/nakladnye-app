@@ -1,6 +1,6 @@
 # Сравнение результата Юсуфа с эталоном «готовый»
 #
-#   python compare_yusuf.py samples/out_yusuf.xlsx "samples/Готовый Юсуф №1643.xlsx"
+#   python compare_yusuf.py samples/out_yusuf.xlsx "samples/Готовый новый Юсуф №1643.xlsx"
 #
 import sys
 

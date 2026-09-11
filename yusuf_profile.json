@@ -8,15 +8,47 @@
   "full_template": "{prefix} {naim}",
   "char_template": "{design} {color}",
   "headers": {
-    "naim": "наим",
+    "naim": "наименование",
     "unit": "ед изм",
-    "full": "полн наим",
-    "char": "харка"
+    "full": "полное наименование",
+    "char": "характеристика"
   },
   "shape_letters": {
     "D": "Прямоугольник",
     "O": "Овал",
     "C": "Круг"
   },
-  "learned_from": "Готовый Юсуф №1643.xlsx"
+  "output_kind": "table",
+  "output_sheet": "Готовый",
+  "output_headers": [
+    "наименование",
+    "ед изм",
+    "полное наименование",
+    "характеристика",
+    "EAN Code",
+    "Width",
+    "Length",
+    "m2 / Unit",
+    "Quantity",
+    "Quantity / m2",
+    "Size & Shope"
+  ],
+  "size_shope_source": "width",
+  "output_col_widths": {
+    "A": 32.33203125,
+    "B": 13.0,
+    "C": 35.88671875,
+    "D": 34.21875,
+    "E": 29.33203125,
+    "F": 13.0,
+    "G": 13.0,
+    "H": 13.0,
+    "I": 13.0,
+    "J": 13.0,
+    "K": 13.0
+  },
+  "learned_from": "Готовый новый Юсуф №1643.xlsx",
+  "learned_source": "Юсуф исходник №1643.xlsx",
+  "learned_rows": 89,
+  "learned_at": "2026-09-11 14:41:46"
 }

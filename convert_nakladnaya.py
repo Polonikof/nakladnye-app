@@ -3,7 +3,8 @@
 Обработка накладных:
   1) Витебские ковры (.xls) — см. VtebskieKovri_ДОКУМЕНТАЦИЯ.md
   2) Обои / УПД ВВП (.xlsx) — очистка наименований + коды из справочника
-  3) Юсуф / packing list (.xlsx) — турецкие ковры, доп. колонки как в эталоне
+  3) Юсуф / packing list (.xlsx) — турецкие ковры; эталон — таблица
+     «наименование / полное наименование / характеристика / EAN / Width…»
 
 Обои (УПД):
   Исходник поставщика содержит длинные наименования вида
@@ -38,6 +39,7 @@ import struct
 import xlrd
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment
+from openpyxl.utils import get_column_letter
 
 # ---------------------------------------------------------------------------
 # Общие настройки
@@ -142,7 +144,7 @@ def app_dir():
 
 
 VERSION_FILENAME = "version.txt"
-BUILT_IN_VERSION = "1.6"
+BUILT_IN_VERSION = "1.7"
 EXE_OVERLAY_MAGIC = b"NAKLDY01"
 
 
@@ -552,9 +554,11 @@ def convert_vitebsk(src_path, out_path=None):
 
 # ===========================================================================
 # ЮСУФ — packing list / invoice ковров (.xlsx)
-# Эталон: копируем лист поставщика и дописываем колонки 12–18
-#   12–13 ширина/длина в см, 14 буква формы, 15 наим, 16 ед изм,
-#   17 полн наим, 18 харка. Цвет без пробелов вокруг «/».
+# Новый эталон (с 1.7): отдельный лист-таблица
+#   наименование | ед изм | полное наименование | характеристика |
+#   EAN Code | Width | Length | m2 / Unit | Quantity | Quantity / m2 | Size & Shope
+# Старый эталон: копия packing list + колонки 12–18 (наим / харка).
+# Какой формат писать — запоминается при «Обучить» (output_kind).
 # ===========================================================================
 _YUSUF_NAME_MARKERS = ("юсуф", "yusuf", "ysf", "packing")
 YUSUF_SHAPE_DEFAULT = {
@@ -563,6 +567,19 @@ YUSUF_SHAPE_DEFAULT = {
     "C": "Круг",
 }
 _YUSUF_TOTAL_MARKERS = ("TOTAL", "GENERAL TOTAL")
+YUSUF_TABLE_HEADERS_DEFAULT = [
+    "наименование",
+    "ед изм",
+    "полное наименование",
+    "характеристика",
+    "EAN Code",
+    "Width",
+    "Length",
+    "m2 / Unit",
+    "Quantity",
+    "Quantity / m2",
+    "Size & Shope",
+]
 
 
 def default_yusuf_profile():
@@ -582,6 +599,10 @@ def default_yusuf_profile():
             "char": "харка",
         },
         "shape_letters": dict(YUSUF_SHAPE_DEFAULT),
+        "output_kind": "table",
+        "output_sheet": "Готовый",
+        "output_headers": list(YUSUF_TABLE_HEADERS_DEFAULT),
+        "size_shope_source": "width",
     }
 
 
@@ -777,81 +798,117 @@ def yusuf_dop_polya(raw, profile=None):
     }
 
 
-def _yusuf_tekst_shapki(path, max_rows=35):
-    try:
-        wb = load_workbook(path, data_only=True, read_only=True)
-        ws = wb[wb.sheetnames[0]]
-        blob = []
-        for i, row in enumerate(ws.iter_rows(values_only=True)):
-            if i >= max_rows:
-                break
-            for v in row:
-                if v is not None:
-                    blob.append(str(v).lower())
-        wb.close()
-        return " ".join(blob)
-    except Exception:
+def _yusuf_ean_kluch(v):
+    if v is None or v == "":
         return ""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    if isinstance(v, int):
+        return str(v)
+    s = str(v).strip()
+    if re.fullmatch(r"\d+\.0+", s):
+        return s.split(".", 1)[0]
+    return s
 
 
-def eto_packing_list(path):
-    text = _yusuf_tekst_shapki(path)
-    return "packing list" in text and "collection name" in text
+def yusuf_m2_unit(width, length):
+    """Площадь в м²: ширина(см) × длина(см) / 10000."""
+    w = _yusuf_chislo(width)
+    l = _yusuf_chislo(length)
+    if w is None or l is None:
+        return None
+    v = w * l / 10000.0
+    if abs(v - round(v)) < 1e-9:
+        return int(round(v))
+    return v
 
 
-def eto_yusuf_gotovyj(path):
-    """Уже готовый packing list Юсуфа (есть доп. колонки или слово «готовый»)."""
-    if not str(path).lower().endswith(".xlsx"):
-        return False
-    bn = os.path.basename(path).lower()
-    if "_юсуф_обработано" in bn:
+def yusuf_qty_m2(m2, qty):
+    q = _yusuf_chislo(qty)
+    if m2 is None or q is None:
+        return None
+    v = float(m2) * q
+    if abs(v - round(v)) < 1e-9:
+        return int(round(v))
+    return v
+
+
+def _yusuf_eq(a, b):
+    if a == b:
         return True
-    yusuf_name = _yusuf_v_imeni(path)
-    if "готов" in bn and yusuf_name:
+    ea, eb = _yusuf_ean_kluch(a), _yusuf_ean_kluch(b)
+    if ea and eb and ea == eb:
         return True
-    if "_обработано" in bn and yusuf_name:
-        return True
-    try:
-        wb = load_workbook(path, data_only=True, read_only=True)
-        ws = wb[wb.sheetnames[0]]
-        hits_naim = 0
-        hits_packing = 0
-        for i, row in enumerate(ws.iter_rows(values_only=True)):
-            if i > 40:
-                break
-            vals = [str(v).strip().lower() for v in row if v is not None]
-            joined = " ".join(vals)
-            if "packing list" in joined:
-                hits_packing += 1
-            if "collection name" in joined:
-                hits_packing += 1
-            if "наим" in vals or "полн наим" in vals or "харка" in vals:
-                hits_naim += 1
-        wb.close()
-        if hits_naim and hits_packing:
-            return True
-        if "готов" in bn and hits_packing >= 2:
-            return True
-    except Exception:
-        return False
-    return False
+    na, nb = _yusuf_chislo(a), _yusuf_chislo(b)
+    if na is not None and nb is not None:
+        return abs(na - nb) < 1e-6
+    return str(a or "").strip() == str(b or "").strip()
 
 
-def eto_yusuf_syroj(path):
-    """Турецкий packing list (Юсуф): COLLECTION NAME / PACKING LIST / имя файла."""
-    if not str(path).lower().endswith(".xlsx"):
-        return False
-    bn = os.path.basename(path).lower()
-    if "_обработано" in bn:
-        return False
-    if eto_yusuf_gotovyj(path):
-        return False
-    if _yusuf_v_imeni(path):
-        return True
-    return eto_packing_list(path)
+def _yusuf_norm_zagolovok(t):
+    return re.sub(r"\s+", " ", str(t or "").strip().lower())
 
 
-def nayti_yusuf_shapku(ws):
+def _yusuf_kluch_zagolovka(title):
+    n = _yusuf_norm_zagolovok(title)
+    if not n:
+        return None
+    if n in ("наименование", "наим") and "полн" not in n:
+        return "naim"
+    if n in ("ед изм", "ед.изм", "ед. изм"):
+        return "unit"
+    if "полное" in n or n in ("полн наим", "полн. наим"):
+        return "full"
+    if "характеристик" in n or n == "харка":
+        return "char"
+    if "ean" in n:
+        return "ean"
+    if n == "width":
+        return "width"
+    if n == "length":
+        return "length"
+    if "m2" in n and "unit" in n:
+        return "m2_unit"
+    if n == "quantity":
+        return "qty"
+    if "quantity" in n and "m2" in n:
+        return "qty_m2"
+    if "size" in n and ("shope" in n or "shape" in n):
+        return "size_shope"
+    if n in ("код", "code"):
+        return "code"
+    if "collection" in n:
+        return "collection"
+    if n == "design":
+        return "design"
+    return None
+
+
+def _yusuf_tablitsa_kolonki(titles):
+    cols = {}
+    for i, t in enumerate(titles, 1):
+        key = _yusuf_kluch_zagolovka(t)
+        if key and key not in cols:
+            cols[key] = i
+    return cols
+
+
+def nayti_yusuf_tablitsu_shapku(ws):
+    """Шапка готовой таблицы: наименование + характеристика (или полное имя)."""
+    max_c = min(ws.max_column or 1, 30)
+    for r in range(1, min(ws.max_row or 1, 40) + 1):
+        titles = [str(ws.cell(r, c).value or "").strip() for c in range(1, max_c + 1)]
+        while titles and titles[-1] == "":
+            titles.pop()
+        if not titles:
+            continue
+        cols = _yusuf_tablitsa_kolonki(titles)
+        if "naim" in cols and ("char" in cols or "full" in cols):
+            return r, cols, titles
+    return None
+
+
+def nayti_yusuf_shapku(ws, trebuetsya=True):
     header_row = None
     for r in range(1, min(ws.max_row, 40) + 1):
         vals = [str(ws.cell(r, c).value or "").strip().lower() for c in range(1, 16)]
@@ -860,7 +917,9 @@ def nayti_yusuf_shapku(ws):
             header_row = r
             break
     if header_row is None:
-        raise ValueError("Не найдена шапка packing list (COLLECTION NAME / Quantity)")
+        if trebuetsya:
+            raise ValueError("Не найдена шапка packing list (COLLECTION NAME / Quantity)")
+        return None
 
     cols = {
         "npp": 1, "collection": 2, "design": 3, "color": 4, "code": 5,
@@ -901,6 +960,114 @@ def nayti_yusuf_shapku(ws):
         data_start = header_row + 1
         sub_row = None
     return header_row, sub_row, data_start, cols
+
+
+def razobrat_yusuf_gotovyj_layout(ws):
+    """packing — доп. колонки на листе packing list; table — отдельная таблица."""
+    pack = nayti_yusuf_shapku(ws, trebuetsya=False)
+    if pack:
+        header_row, sub_row, data_start, cols = pack
+        return {
+            "kind": "packing",
+            "header_row": header_row,
+            "sub_row": sub_row,
+            "data_start": data_start,
+            "cols": cols,
+            "headers": None,
+        }
+    found = nayti_yusuf_tablitsu_shapku(ws)
+    if found:
+        header_row, cols, titles = found
+        return {
+            "kind": "table",
+            "header_row": header_row,
+            "sub_row": None,
+            "data_start": header_row + 1,
+            "cols": cols,
+            "headers": titles,
+        }
+    return None
+
+
+def _yusuf_tekst_shapki(path, max_rows=35):
+    try:
+        wb = load_workbook(path, data_only=True, read_only=True)
+        ws = wb[wb.sheetnames[0]]
+        blob = []
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i >= max_rows:
+                break
+            for v in row:
+                if v is not None:
+                    blob.append(str(v).lower())
+        wb.close()
+        return " ".join(blob)
+    except Exception:
+        return ""
+
+
+def eto_packing_list(path):
+    text = _yusuf_tekst_shapki(path)
+    return "packing list" in text and "collection name" in text
+
+
+def eto_yusuf_gotovyj(path):
+    """Уже готовый Юсуф: таблица-эталон, packing list с доп. колонками или «готовый» в имени."""
+    if not str(path).lower().endswith(".xlsx"):
+        return False
+    bn = os.path.basename(path).lower()
+    if "_юсуф_обработано" in bn:
+        return True
+    yusuf_name = _yusuf_v_imeni(path)
+    if "готов" in bn and yusuf_name:
+        return True
+    if "_обработано" in bn and yusuf_name:
+        return True
+    try:
+        wb = load_workbook(path, data_only=True, read_only=True)
+        ws = wb[wb.sheetnames[0]]
+        hits_naim = 0
+        hits_packing = 0
+        hits_table = 0
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i > 40:
+                break
+            vals = [str(v).strip().lower() for v in row if v is not None]
+            joined = " ".join(vals)
+            if "packing list" in joined:
+                hits_packing += 1
+            if "collection name" in joined:
+                hits_packing += 1
+            if any(v in ("наим", "наименование") for v in vals) or "полн наим" in vals or "харка" in vals:
+                hits_naim += 1
+            if any("ean" in v for v in vals) and any(v == "width" for v in vals):
+                hits_table += 1
+            if any("характеристик" in v for v in vals) and any("наименование" in v for v in vals):
+                hits_table += 1
+        wb.close()
+        if hits_naim and hits_packing:
+            return True
+        if hits_table and hits_naim:
+            return True
+        if "готов" in bn and hits_packing >= 2:
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def eto_yusuf_syroj(path):
+    """Турецкий packing list (Юсуф): COLLECTION NAME / PACKING LIST / имя файла."""
+    if not str(path).lower().endswith(".xlsx"):
+        return False
+    bn = os.path.basename(path).lower()
+    if "_обработано" in bn:
+        return False
+    if eto_yusuf_gotovyj(path):
+        return False
+    if _yusuf_v_imeni(path):
+        return True
+    return eto_packing_list(path)
 
 
 def _yusuf_eto_itog(npp):
@@ -968,25 +1135,57 @@ def postroit_imya_rezultata_yusuf(src_path):
     return unik_put(os.path.join(folder, f"{base}_ЮСУФ_Обработано.xlsx"))
 
 
-def convert_yusuf(src_path, out_path=None, profile=None):
-    """Копирует packing list и заполняет колонки эталона «готовый Юсуф»."""
-    profile = profile or load_yusuf_profile()
-    raw_rows, header_row, sub_row, data_start, first_total, cols = chitat_yusuf_stroki(src_path)
-    if not raw_rows:
-        raise ValueError("В packing list нет строк с товаром")
-    if out_path is None:
-        out_path = postroit_imya_rezultata_yusuf(src_path)
-
+def _yusuf_log_sbornik(src_path, raw_rows):
     counts = {}
     for r in raw_rows:
         counts[r["collection"]] = counts.get(r["collection"], 0) + 1
-
     log(f"Файл: {os.path.basename(src_path)}  [Юсуф / ковры]", "head")
     log(f"Обнаружено строк: {len(raw_rows)}")
     for label, cnt in sorted(counts.items(), key=lambda x: -x[1]):
         log(f"  - {label}: {cnt} стр.")
     log()
 
+
+def _yusuf_qty_vyvod(v):
+    n = to_int_if_whole(v)
+    if isinstance(n, float) and n.is_integer():
+        return int(n)
+    return n
+
+
+def _yusuf_size_shope_znachenie(extra, raw, profile):
+    mode = (profile or {}).get("size_shope_source") or "width"
+    if mode == "length":
+        return extra["length_cm"]
+    if mode == "size_shape":
+        return raw.get("size_shape")
+    if mode == "letter":
+        return extra["letter"]
+    return extra["width_cm"]
+
+
+def _yusuf_table_values(raw, extra, profile):
+    w = extra["width_cm"]
+    l = extra["length_cm"]
+    qty = _yusuf_qty_vyvod(raw.get("qty"))
+    return {
+        "naim": extra["naim"],
+        "unit": extra["unit"],
+        "full": extra["full"],
+        "char": extra["char"],
+        "ean": _yusuf_ean_kluch(raw.get("ean")),
+        "width": w,
+        "length": l,
+        "m2_unit": yusuf_m2_unit(w, l),
+        "qty": qty,
+        "qty_m2": yusuf_qty_m2(yusuf_m2_unit(w, l), qty),
+        "size_shope": _yusuf_size_shope_znachenie(extra, raw, profile),
+    }
+
+
+def convert_yusuf_packing(src_path, out_path, profile, raw_rows, header_row,
+                          sub_row, data_start, first_total, cols):
+    """Старый эталон: копия packing list + колонки 12–18."""
     wb = load_workbook(src_path)
     ws = wb[wb.sheetnames[0]]
     headers = profile.get("headers") or default_yusuf_profile()["headers"]
@@ -1032,44 +1231,87 @@ def convert_yusuf(src_path, out_path=None, profile=None):
     return len(raw_rows), out_path
 
 
+def convert_yusuf_table(src_path, out_path, profile, raw_rows):
+    """Новый эталон: лист-таблица (наименование / харка / EAN / размеры)."""
+    wb = Workbook()
+    ws = wb.active
+    sheet_name = str(profile.get("output_sheet") or "Готовый")[:31]
+    ws.title = sheet_name or "Готовый"
+    headers = profile.get("output_headers") or list(YUSUF_TABLE_HEADERS_DEFAULT)
+    font = Font(name="Calibri", size=11)
+    for c, title in enumerate(headers, 1):
+        cell = ws.cell(1, c, title)
+        cell.font = font
+    cols = _yusuf_tablitsa_kolonki(headers)
+    for i, raw in enumerate(raw_rows, 2):
+        extra = yusuf_dop_polya(raw, profile)
+        values = _yusuf_table_values(raw, extra, profile)
+        for key, col in cols.items():
+            if key in values:
+                cell = ws.cell(i, col, values[key])
+                cell.font = font
+    widths = profile.get("output_col_widths") or {
+        "A": 32, "B": 13, "C": 36, "D": 34, "E": 29, "F": 13,
+        "G": 13, "H": 13, "I": 13, "J": 13, "K": 13,
+    }
+    for letter, width in widths.items():
+        try:
+            ws.column_dimensions[str(letter)].width = float(width)
+        except Exception:
+            pass
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    wb.save(out_path)
+    return len(raw_rows), out_path
+
+
+def convert_yusuf(src_path, out_path=None, profile=None):
+    """Packing list Юсуфа → эталон (таблица или доп. колонки — как выучили)."""
+    profile = profile or load_yusuf_profile()
+    raw_rows, header_row, sub_row, data_start, first_total, cols = chitat_yusuf_stroki(src_path)
+    if not raw_rows:
+        raise ValueError("В packing list нет строк с товаром")
+    if out_path is None:
+        out_path = postroit_imya_rezultata_yusuf(src_path)
+    _yusuf_log_sbornik(src_path, raw_rows)
+    kind = str(profile.get("output_kind") or "table").strip().lower()
+    if kind == "packing":
+        return convert_yusuf_packing(
+            src_path, out_path, profile, raw_rows, header_row, sub_row,
+            data_start, first_total, cols)
+    return convert_yusuf_table(src_path, out_path, profile, raw_rows)
+
+
 def sravnit_yusuf(out_path, got_path):
-    """Сверка доп. колонок результата с эталоном. Список расхождений."""
+    """Сверка результата с эталоном. Список расхождений."""
     out_wb = load_workbook(out_path, data_only=True)
     got_wb = load_workbook(got_path, data_only=True)
     out_ws = out_wb[out_wb.sheetnames[0]]
     got_ws = got_wb[got_wb.sheetnames[0]]
+    out_layout = razobrat_yusuf_gotovyj_layout(out_ws)
+    got_layout = razobrat_yusuf_gotovyj_layout(got_ws)
+    if not out_layout:
+        out_wb.close()
+        got_wb.close()
+        return ["в результате не распознана шапка Юсуфа"]
+    if not got_layout:
+        out_wb.close()
+        got_wb.close()
+        return ["в эталоне не распознана шапка Юсуфа"]
+    if out_layout["kind"] != got_layout["kind"]:
+        out_wb.close()
+        got_wb.close()
+        return ["разный формат: результат %s, эталон %s" % (
+            out_layout["kind"], got_layout["kind"])]
 
-    def data_rows(ws):
-        header_row, sub_row, data_start, cols = nayti_yusuf_shapku(ws)
-        rows = []
-        for r in range(data_start, ws.max_row + 1):
-            npp = ws.cell(r, cols["npp"]).value
-            if _yusuf_eto_itog(npp):
-                break
-            try:
-                int(float(npp))
-            except Exception:
-                continue
-            coll = str(ws.cell(r, cols["collection"]).value or "").strip()
-            if not coll:
-                continue
-            rows.append({
-                "npp": to_int_if_whole(npp),
-                "coll": coll,
-                "design": str(ws.cell(r, cols["design"]).value or "").strip(),
-                "color": yusuf_cvet(ws.cell(r, 4).value),
-                "w": yusuf_sm_kak_chislo(ws.cell(r, 12).value),
-                "l": yusuf_sm_kak_chislo(ws.cell(r, 13).value),
-                "letter": str(ws.cell(r, 14).value or "").strip(),
-                "naim": str(ws.cell(r, 15).value or "").strip(),
-                "unit": str(ws.cell(r, 16).value or "").strip(),
-                "full": str(ws.cell(r, 17).value or "").strip(),
-                "char": str(ws.cell(r, 18).value or "").strip(),
-            })
-        return rows
-
-    out_rows = data_rows(out_ws)
-    got_rows = data_rows(got_ws)
+    if got_layout["kind"] == "table":
+        out_rows = _yusuf_chitat_tablitsu_dlya_sravneniya(out_ws, out_layout)
+        got_rows = _yusuf_chitat_tablitsu_dlya_sravneniya(got_ws, got_layout)
+        fields = ["naim", "unit", "full", "char", "ean", "w", "l", "m2", "qty",
+                  "qty_m2", "size"]
+    else:
+        out_rows = _yusuf_chitat_packing_dlya_sravneniya(out_ws, out_layout)
+        got_rows = _yusuf_chitat_packing_dlya_sravneniya(got_ws, got_layout)
+        fields = ["color", "w", "l", "letter", "naim", "unit", "full", "char"]
     out_wb.close()
     got_wb.close()
     diffs = []
@@ -1077,13 +1319,67 @@ def sravnit_yusuf(out_path, got_path):
         diffs.append("разное число строк: результат %s, эталон %s" % (
             len(out_rows), len(got_rows)))
         return diffs
-    fields = ["color", "w", "l", "letter", "naim", "unit", "full", "char"]
     for i, (o, g) in enumerate(zip(out_rows, got_rows), 1):
-        bad = [f for f in fields if o[f] != g[f]]
+        bad = [f for f in fields if not _yusuf_eq(o.get(f), g.get(f))]
         if bad:
             diffs.append("#%s: " % i + "; ".join(
-                "%s: %r != %r" % (f, o[f], g[f]) for f in bad))
+                "%s: %r != %r" % (f, o.get(f), g.get(f)) for f in bad))
     return diffs
+
+
+def _yusuf_chitat_packing_dlya_sravneniya(ws, layout):
+    data_start = layout["data_start"]
+    cols = layout["cols"]
+    rows = []
+    for r in range(data_start, ws.max_row + 1):
+        npp = ws.cell(r, cols["npp"]).value
+        if _yusuf_eto_itog(npp):
+            break
+        try:
+            int(float(npp))
+        except Exception:
+            continue
+        coll = str(ws.cell(r, cols["collection"]).value or "").strip()
+        if not coll:
+            continue
+        rows.append({
+            "npp": to_int_if_whole(npp),
+            "coll": coll,
+            "design": str(ws.cell(r, cols["design"]).value or "").strip(),
+            "color": yusuf_cvet(ws.cell(r, 4).value),
+            "w": yusuf_sm_kak_chislo(ws.cell(r, 12).value),
+            "l": yusuf_sm_kak_chislo(ws.cell(r, 13).value),
+            "letter": str(ws.cell(r, 14).value or "").strip(),
+            "naim": str(ws.cell(r, 15).value or "").strip(),
+            "unit": str(ws.cell(r, 16).value or "").strip(),
+            "full": str(ws.cell(r, 17).value or "").strip(),
+            "char": str(ws.cell(r, 18).value or "").strip(),
+        })
+    return rows
+
+
+def _yusuf_chitat_tablitsu_dlya_sravneniya(ws, layout):
+    cols = layout["cols"]
+    rows = []
+    for r in range(layout["data_start"], ws.max_row + 1):
+        naim = str(ws.cell(r, cols.get("naim", 1)).value or "").strip()
+        ean = _yusuf_ean_kluch(ws.cell(r, cols["ean"]).value) if cols.get("ean") else ""
+        if not naim and not ean:
+            continue
+        rows.append({
+            "naim": naim,
+            "unit": str(ws.cell(r, cols["unit"]).value or "").strip() if cols.get("unit") else "",
+            "full": str(ws.cell(r, cols["full"]).value or "").strip() if cols.get("full") else "",
+            "char": str(ws.cell(r, cols["char"]).value or "").strip() if cols.get("char") else "",
+            "ean": ean,
+            "w": yusuf_sm_kak_chislo(ws.cell(r, cols["width"]).value) if cols.get("width") else None,
+            "l": yusuf_sm_kak_chislo(ws.cell(r, cols["length"]).value) if cols.get("length") else None,
+            "m2": ws.cell(r, cols["m2_unit"]).value if cols.get("m2_unit") else None,
+            "qty": _yusuf_qty_vyvod(ws.cell(r, cols["qty"]).value) if cols.get("qty") else None,
+            "qty_m2": ws.cell(r, cols["qty_m2"]).value if cols.get("qty_m2") else None,
+            "size": ws.cell(r, cols["size_shope"]).value if cols.get("size_shope") else None,
+        })
+    return rows
 
 
 def _yusuf_chastoe(items, default):
@@ -1123,8 +1419,62 @@ def _yusuf_shablon_prosto(text, mapping):
 def chitat_yusuf_gotovye_polya(got_path):
     wb = load_workbook(got_path, data_only=True)
     ws = wb[wb.sheetnames[0]]
-    header_row, sub_row, data_start, cols = nayti_yusuf_shapku(ws)
+    layout = razobrat_yusuf_gotovyj_layout(ws)
+    if not layout:
+        wb.close()
+        raise ValueError(
+            "Не найдена шапка Юсуфа: ни packing list (COLLECTION NAME / Quantity), "
+            "ни таблица (наименование / характеристика)")
     rows = []
+    if layout["kind"] == "table":
+        cols = layout["cols"]
+        for r in range(layout["data_start"], ws.max_row + 1):
+            naim = str(ws.cell(r, cols.get("naim", 1)).value or "").strip() if cols.get("naim") else ""
+            ean = ws.cell(r, cols["ean"]).value if cols.get("ean") else None
+            if not naim and not _yusuf_ean_kluch(ean):
+                continue
+            unit = str(ws.cell(r, cols["unit"]).value or "").strip() if cols.get("unit") else ""
+            full = str(ws.cell(r, cols["full"]).value or "").strip() if cols.get("full") else ""
+            char = str(ws.cell(r, cols["char"]).value or "").strip() if cols.get("char") else ""
+            width = ws.cell(r, cols["width"]).value if cols.get("width") else None
+            length = ws.cell(r, cols["length"]).value if cols.get("length") else None
+            size_shope = ws.cell(r, cols["size_shope"]).value if cols.get("size_shope") else None
+            rows.append({
+                "layout": "table",
+                "row": r,
+                "npp": r - layout["header_row"],
+                "collection": "",
+                "design": "",
+                "color": "",
+                "ean": ean,
+                "width": width,
+                "length": length,
+                "width_cm": width,
+                "length_cm": length,
+                "letter": "",
+                "naim": naim,
+                "unit": unit,
+                "full": full,
+                "char": char,
+                "size_shope": size_shope,
+                "m2_unit": ws.cell(r, cols["m2_unit"]).value if cols.get("m2_unit") else None,
+                "qty": ws.cell(r, cols["qty"]).value if cols.get("qty") else None,
+            })
+        sheet_name = ws.title
+        headers = list(layout["headers"] or [])
+        col_widths = {}
+        for c in range(1, max(len(headers), 1) + 1):
+            letter = get_column_letter(c)
+            w = ws.column_dimensions[letter].width
+            if w:
+                col_widths[letter] = w
+        wb.close()
+        return rows, layout, sheet_name, headers, col_widths
+
+    header_row = layout["header_row"]
+    sub_row = layout["sub_row"]
+    data_start = layout["data_start"]
+    cols = layout["cols"]
     for r in range(data_start, ws.max_row + 1):
         npp = ws.cell(r, cols["npp"]).value
         if _yusuf_eto_itog(npp):
@@ -1137,11 +1487,13 @@ def chitat_yusuf_gotovye_polya(got_path):
         if not coll:
             continue
         rows.append({
+            "layout": "packing",
             "row": r,
             "npp": npp_n,
             "collection": coll,
             "design": str(ws.cell(r, cols["design"]).value or "").strip(),
             "color": str(ws.cell(r, 4).value or "").strip(),
+            "ean": ws.cell(r, cols["ean"]).value if cols.get("ean") else None,
             "width": ws.cell(r, cols["width"]).value,
             "length": ws.cell(r, cols["length"]).value,
             "width_cm": ws.cell(r, 12).value,
@@ -1151,25 +1503,74 @@ def chitat_yusuf_gotovye_polya(got_path):
             "unit": str(ws.cell(r, 16).value or "").strip(),
             "full": str(ws.cell(r, 17).value or "").strip(),
             "char": str(ws.cell(r, 18).value or "").strip(),
+            "size_shope": None,
         })
     wb.close()
-    return rows, header_row, sub_row
+    return rows, layout, None, None, None
+
+
+def _yusuf_podobrat_istochnik(got, src_by_ean, src_by_row, src_by_key):
+    ean_k = _yusuf_ean_kluch(got.get("ean"))
+    if ean_k and ean_k in src_by_ean:
+        return src_by_ean[ean_k]
+    raw = src_by_row.get(got.get("row"))
+    if raw:
+        return raw
+    return src_by_key.get((got.get("collection"), got.get("npp"), got.get("design")))
+
+
+def _yusuf_golos_size_shope(got, raw):
+    sh = got.get("size_shope")
+    if sh is None or sh == "":
+        return None
+    w = yusuf_sm_kak_chislo(got.get("width") if got.get("width") is not None else (
+        raw.get("width") if raw else None))
+    l = yusuf_sm_kak_chislo(got.get("length") if got.get("length") is not None else (
+        raw.get("length") if raw else None))
+    letter = (got.get("letter") or (yusuf_bukva_formy(raw.get("size_shape")) if raw else ""))
+    sh_n = yusuf_sm_kak_chislo(sh)
+    if sh_n is not None and w is not None and sh_n == w:
+        return "width"
+    if sh_n is not None and l is not None and sh_n == l:
+        return "length"
+    if str(sh).strip() == str((raw or {}).get("size_shape") or "").strip():
+        return "size_shape"
+    if letter and str(sh).strip() == str(letter).strip():
+        return "letter"
+    return None
 
 
 def learn_yusuf_from_gotovyj(got_path, folder=None, source_path=None):
     """Полностью перезаписывает правила Юсуфа по эталону (и исходнику, если есть)."""
     profile = default_yusuf_profile()
-    got_rows, header_row, sub_row = chitat_yusuf_gotovye_polya(got_path)
-    wb = load_workbook(got_path, data_only=True)
-    ws = wb[wb.sheetnames[0]]
-    label_row = sub_row or header_row
-    headers = dict(default_yusuf_profile()["headers"])
-    for key, col in (("naim", 15), ("unit", 16), ("full", 17), ("char", 18)):
-        val = ws.cell(label_row, col).value
-        if val:
-            headers[key] = str(val).strip()
-    wb.close()
-    profile["headers"] = headers
+    got_rows, layout, sheet_name, table_headers, col_widths = chitat_yusuf_gotovye_polya(got_path)
+    kind = layout["kind"]
+    profile["output_kind"] = kind
+    if kind == "table":
+        profile["output_sheet"] = sheet_name or "Готовый"
+        if table_headers:
+            profile["output_headers"] = table_headers
+        if col_widths:
+            profile["output_col_widths"] = col_widths
+        headers = dict(default_yusuf_profile()["headers"])
+        cols = layout["cols"]
+        titles = table_headers or []
+        for key in ("naim", "unit", "full", "char"):
+            if key in cols and 1 <= cols[key] <= len(titles):
+                headers[key] = titles[cols[key] - 1]
+        profile["headers"] = headers
+    else:
+        wb = load_workbook(got_path, data_only=True)
+        ws = wb[wb.sheetnames[0]]
+        label_row = layout["sub_row"] or layout["header_row"]
+        headers = dict(default_yusuf_profile()["headers"])
+        for key, col in (("naim", 15), ("unit", 16), ("full", 17), ("char", 18)):
+            val = ws.cell(label_row, col).value
+            if val:
+                headers[key] = str(val).strip()
+        wb.close()
+        profile["headers"] = headers
+        profile["output_kind"] = "packing"
 
     letters = dict(YUSUF_SHAPE_DEFAULT)
     units = []
@@ -1179,31 +1580,59 @@ def learn_yusuf_from_gotovyj(got_path, folder=None, source_path=None):
     char_tpls = []
     strip_slash = []
     decimals = []
+    size_votes = []
 
     src_by_row = {}
     src_by_key = {}
+    src_by_ean = {}
     if source_path and os.path.exists(source_path):
         src_rows = chitat_yusuf_stroki(source_path)[0]
         for raw in src_rows:
             src_by_row[raw["row"]] = raw
             src_by_key[(raw["collection"], raw["npp"], raw["design"])] = raw
+            ean_k = _yusuf_ean_kluch(raw.get("ean"))
+            if ean_k:
+                src_by_ean[ean_k] = raw
 
     n_rows = 0
     for got in got_rows:
         if not got["naim"]:
             continue
         n_rows += 1
+        raw = _yusuf_podobrat_istochnik(got, src_by_ean, src_by_row, src_by_key)
+        if raw:
+            got["collection"] = raw["collection"]
+            got["design"] = raw["design"]
+            if not got.get("letter"):
+                got["letter"] = yusuf_bukva_formy(raw.get("size_shape"))
+            if not got.get("color"):
+                got["color"] = yusuf_cvet(raw.get("color"))
         letter = (got["letter"] or "").upper()
         forma = got["naim"].split()[-1] if got["naim"].split() else ""
+        if not letter and forma:
+            for k, v in letters.items():
+                if v == forma:
+                    letter = k
+                    got["letter"] = k
+                    break
         if letter and forma:
             letters[letter] = forma
         if got["unit"]:
             units.append(got["unit"])
-        raw = src_by_row.get(got["row"]) or src_by_key.get(
-            (got["collection"], got["npp"], got["design"]))
+        vote = _yusuf_golos_size_shope(got, raw)
+        if vote:
+            size_votes.append(vote)
+
         src_color = str(raw["color"]).strip() if raw else got["color"]
         stripped = re.sub(r"\s*/\s*", "/", src_color)
-        if "/" in src_color:
+        if got.get("layout") == "table":
+            hay = got.get("char") or ""
+            if "/" in src_color:
+                if stripped in hay and src_color not in hay:
+                    strip_slash.append(True)
+                elif src_color in hay:
+                    strip_slash.append(False)
+        elif "/" in src_color:
             if got["color"] == stripped and got["color"] != src_color:
                 strip_slash.append(True)
             elif got["color"] == src_color and src_color != stripped:
@@ -1257,6 +1686,8 @@ def learn_yusuf_from_gotovyj(got_path, folder=None, source_path=None):
     if strip_slash:
         profile["color_strip_slash_spaces"] = sum(1 for x in strip_slash if x) >= (
             len(strip_slash) / 2.0)
+    if size_votes:
+        profile["size_shope_source"] = _yusuf_chastoe(size_votes, "width")
 
     profile["enabled"] = True
     profile["learned_from"] = os.path.basename(got_path)
@@ -1266,6 +1697,7 @@ def learn_yusuf_from_gotovyj(got_path, folder=None, source_path=None):
     profile["learned_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     path = save_yusuf_profile(profile, folder)
     log("Правила Юсуфа перезаписаны: %s" % path, "ok")
+    log("  формат: %s" % profile.get("output_kind"))
     log("  наим: %s" % profile.get("naim_template"))
     log("  полн: %s" % profile.get("full_template"))
     log("  харка: %s" % profile.get("char_template"))

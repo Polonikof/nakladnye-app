@@ -14,12 +14,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SAMPLES = os.path.join(HERE, "samples")
 SRC = os.path.join(SAMPLES, "Юсуф исходник №1643.xlsx")
 GOT = os.path.join(SAMPLES, "Готовый Юсуф №1643.xlsx")
+GOT_NEW = os.path.join(SAMPLES, "Готовый новый Юсуф №1643.xlsx")
+
+
+def packing_profile():
+    prof = core.default_yusuf_profile()
+    prof["output_kind"] = "packing"
+    return prof
 
 
 class YusufConvertTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not os.path.isfile(SRC) or not os.path.isfile(GOT):
+        if not os.path.isfile(SRC) or not os.path.isfile(GOT) or not os.path.isfile(GOT_NEW):
             raise unittest.SkipTest("нет samples/Юсуф …1643.xlsx")
 
     def test_detect_source_and_ready(self):
@@ -28,7 +35,10 @@ class YusufConvertTests(unittest.TestCase):
         self.assertFalse(core.eto_yusuf_gotovyj(SRC))
         self.assertTrue(core.eto_yusuf_gotovyj(GOT))
         self.assertFalse(core.eto_yusuf_syroj(GOT))
+        self.assertTrue(core.eto_yusuf_gotovyj(GOT_NEW))
+        self.assertFalse(core.eto_yusuf_syroj(GOT_NEW))
         self.assertEqual(core.opredelit_tip_faila(GOT), "skip")
+        self.assertEqual(core.opredelit_tip_faila(GOT_NEW), "skip")
         self.assertFalse(core.eto_oboi_gotovyj(GOT))
         self.assertFalse(core.eto_oboi_syroj(SRC))
 
@@ -46,10 +56,22 @@ class YusufConvertTests(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="yusuf_out_")
         try:
             out = os.path.join(tmp, "out.xlsx")
-            rows, path = core.convert_yusuf(SRC, out)
+            rows, path = core.convert_yusuf(SRC, out, profile=packing_profile())
             self.assertEqual(rows, 89)
             self.assertEqual(path, out)
             diffs = core.sravnit_yusuf(out, GOT)
+            self.assertEqual(diffs, [], msg="\n".join(diffs[:20]))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_convert_table_matches_new_ready(self):
+        tmp = tempfile.mkdtemp(prefix="yusuf_tbl_")
+        try:
+            out = os.path.join(tmp, "out.xlsx")
+            rows, path = core.convert_yusuf(SRC, out)
+            self.assertEqual(rows, 89)
+            self.assertEqual(path, out)
+            diffs = core.sravnit_yusuf(out, GOT_NEW)
             self.assertEqual(diffs, [], msg="\n".join(diffs[:20]))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -115,6 +137,50 @@ class YusufConvertTests(unittest.TestCase):
             reports = itog.get("reports") or []
             self.assertTrue(reports)
             self.assertEqual(reports[0].get("diffs"), [])
+            prof = core.load_yusuf_profile(catalog)
+            self.assertEqual(prof.get("output_kind"), "packing")
+        finally:
+            shutil.rmtree(inbox, ignore_errors=True)
+            shutil.rmtree(catalog, ignore_errors=True)
+
+    def test_learn_new_table_ready(self):
+        inbox = tempfile.mkdtemp(prefix="yusuf_tbl_learn_")
+        catalog = tempfile.mkdtemp(prefix="yusuf_tbl_cat_")
+        try:
+            shutil.copy2(SRC, os.path.join(inbox, "Юсуф исходник №1643.xlsx"))
+            shutil.copy2(
+                GOT_NEW,
+                os.path.join(inbox, "Готовый  новый Юсуф №1643.xlsx"))
+            pairs = learn_novye.naiti_pary(inbox)
+            self.assertEqual(len(pairs), 1, pairs)
+            self.assertEqual(pairs[0]["kind"], "yusuf")
+            itog = learn_novye.process_inbox(
+                inbox, force=True, catalog_folder=catalog)
+            self.assertEqual(itog["errors"], [], itog["errors"])
+            reports = itog.get("reports") or []
+            self.assertTrue(reports)
+            self.assertEqual(reports[0].get("diffs"), [])
+            prof = core.load_yusuf_profile(catalog)
+            self.assertEqual(prof.get("output_kind"), "table")
+            self.assertEqual(prof.get("output_sheet"), "Готовый")
+            self.assertEqual(prof.get("size_shope_source"), "width")
+            self.assertEqual(prof.get("unit"), "шт")
+            extra = core.yusuf_dop_polya({
+                "collection": "ETNO",
+                "design": "9624A",
+                "color": "BURGUNDY / BURGUNDY",
+                "width": 200,
+                "length": 300,
+                "size_shape": "200 x 300 D",
+            }, profile=prof)
+            self.assertEqual(extra["naim"], "ETNO 2*3 Прямоугольник")
+            self.assertEqual(extra["full"], "Ковер ETNO 2*3 Прямоугольник")
+            self.assertEqual(extra["char"], "9624A BURGUNDY/BURGUNDY")
+
+            out = os.path.join(catalog, "out.xlsx")
+            core.convert_yusuf(SRC, out, profile=prof)
+            diffs = core.sravnit_yusuf(out, GOT_NEW)
+            self.assertEqual(diffs, [], msg="\n".join(diffs[:20]))
         finally:
             shutil.rmtree(inbox, ignore_errors=True)
             shutil.rmtree(catalog, ignore_errors=True)
