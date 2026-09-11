@@ -196,5 +196,34 @@ class YusufConvertTests(unittest.TestCase):
             shutil.rmtree(catalog, ignore_errors=True)
 
 
+class EmployeePackTests(unittest.TestCase):
+    def test_zip_contains_exe_and_catalogs(self):
+        catalog = tempfile.mkdtemp(prefix="pack_cat_")
+        try:
+            shutil.copy2(os.path.join(HERE, "oboi_catalog.json"),
+                         os.path.join(catalog, core.OBOI_CATALOG_FILENAME))
+            shutil.copy2(os.path.join(HERE, "yusuf_profile.json"),
+                         os.path.join(catalog, core.YUSUF_PROFILE_FILENAME))
+            fake_exe = os.path.join(catalog, "fake.exe")
+            with open(fake_exe, "wb") as f:
+                f.write(b"MZ-fake-nakladnye")
+            info = learn_novye.sobrat_paket_dlya_sotrudnika(
+                catalog, "1.5.1", fake_exe)
+            self.assertTrue(os.path.isfile(info["zip"]))
+            self.assertTrue(info["zip"].endswith("Накладные_1.5.1_для_сотрудника.zip"))
+            import zipfile
+            with zipfile.ZipFile(info["zip"], "r") as zf:
+                names = set(zf.namelist())
+            self.assertIn("Накладные.exe", names)
+            self.assertIn("oboi_catalog.json", names)
+            self.assertIn("yusuf_profile.json", names)
+            self.assertIn("version.txt", names)
+            self.assertIn("ПРОЧТИТЕ.txt", names)
+            with zipfile.ZipFile(info["zip"], "r") as zf:
+                self.assertEqual(zf.read("Накладные.exe"), b"MZ-fake-nakladnye")
+        finally:
+            shutil.rmtree(catalog, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

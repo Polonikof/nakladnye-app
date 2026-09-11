@@ -531,23 +531,32 @@ class App(tk.Tk):
             if exe:
                 self._append(f"Новая программа v{ver}:", "ok")
                 self._append(exe, "ok")
-                self._append("Закройте это окно и откройте новый файл.", "muted")
-                text = f"Готово. Новая программа: {os.path.basename(exe)}"
+                zip_path = itog.get("zip")
+                if zip_path:
+                    self._append("Архив для сотрудника:", "ok")
+                    self._append(zip_path, "ok")
+                    self._append("Отправьте этот zip коллеге: внутри Накладные.exe и справочники.", "muted")
+                self._append("Закройте это окно и откройте новый файл у себя.", "muted")
+                text = f"Готово. Сборка для сотрудника: {os.path.basename(zip_path or exe)}"
                 kind = "ok"
+                highlight = zip_path or exe
                 try:
                     if sys.platform.startswith("win"):
                         subprocess.Popen(
-                            ["explorer", "/select,", os.path.abspath(exe)]
+                            ["explorer", "/select,", os.path.abspath(highlight)]
                         )
                     else:
-                        open_in_explorer(os.path.dirname(exe))
+                        open_in_explorer(os.path.dirname(highlight))
                 except Exception:
                     pass
-                messagebox.showinfo(
-                    APP_NAME,
-                    f"Новая программа сохранена:\n\n{exe}\n\n"
-                    f"Закройте это окно и откройте файл\nНакладные_{ver}.exe"
-                )
+                msg = f"Новая программа у вас:\n{exe}\n"
+                if zip_path:
+                    msg += (
+                        f"\nОтправьте сотруднику архив:\n{zip_path}\n\n"
+                        "Он распаковывает zip и запускает Накладные.exe."
+                    )
+                msg += f"\n\nЗакройте это окно и откройте Накладные_{ver}.exe"
+                messagebox.showinfo(APP_NAME, msg)
             else:
                 cat = itog.get("catalog_path") or ""
                 self._append(f"Справочник обновлён: {cat}", "ok")

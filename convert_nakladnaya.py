@@ -141,7 +141,7 @@ def app_dir():
 
 
 VERSION_FILENAME = "version.txt"
-BUILT_IN_VERSION = "1.4"
+BUILT_IN_VERSION = "1.5"
 
 
 def current_version():
