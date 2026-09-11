@@ -4,7 +4,7 @@
 В нём нет кнопки «Обучить». Это нормально: я менял исходники, а не тот файл на диске.
 
 Новую программу скачайте здесь:
-https://github.com/Polonikof/nakladnye-app/releases/latest
+https://github.com/Polonikof/nakladnye/releases/latest
 
 Файл называется Nakladnye.exe
 

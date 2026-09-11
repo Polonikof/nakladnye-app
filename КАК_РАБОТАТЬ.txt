@@ -2,7 +2,7 @@
 
 Сначала нужна НОВАЯ программа (версия 1.1, кнопка «Обучить»).
 Старый файл C:\Накладные\Накладные.exe её не содержит.
-Скачайте новый: https://github.com/Polonikof/nakladnye-app/releases/latest
+Скачайте новый: https://github.com/Polonikof/nakladnye/releases/latest
 и замените им C:\Накладные\Накладные.exe
 (см. файл ГДЕ_НОВАЯ_ВЕРСИЯ.txt).
 
