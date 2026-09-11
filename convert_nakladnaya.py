@@ -22,6 +22,9 @@
     python convert_nakladnaya.py <файл> <результат.xlsx>
     python convert_nakladnaya.py --force
     python convert_nakladnaya.py --learn-oboi "… готовый .xlsx"
+    python convert_nakladnaya.py --setup-inbox
+    python convert_nakladnaya.py --learn-inbox
+    python convert_nakladnaya.py --watch
 """
 
 import sys
@@ -1107,10 +1110,51 @@ def opisanie_itoga(itog):
     return "Новых накладных в папке не найдено"
 
 
+def _arg_value(raw_args, flag):
+    if flag in raw_args:
+        idx = raw_args.index(flag)
+        if idx + 1 < len(raw_args):
+            return raw_args[idx + 1]
+    prefix = flag + "="
+    for a in raw_args:
+        if a.startswith(prefix):
+            return a[len(prefix):]
+    return None
+
+
 def main(argv=None):
     raw_args = list(sys.argv[1:] if argv is None else argv)
     force = "--force" in raw_args
-    args = [a for a in raw_args if a not in ("--force", "--learn-oboi")]
+    flags = ("--force", "--learn-oboi", "--learn-inbox", "--setup-inbox", "--watch",
+             "--folder")
+    args = []
+    skip_next = False
+    for i, a in enumerate(raw_args):
+        if skip_next:
+            skip_next = False
+            continue
+        if a in flags:
+            if a in ("--learn-oboi", "--folder") and i + 1 < len(raw_args):
+                skip_next = True
+            continue
+        if a.startswith("--folder=") or a.startswith("--learn-oboi="):
+            continue
+        args.append(a)
+
+    if "--setup-inbox" in raw_args or "--learn-inbox" in raw_args or "--watch" in raw_args:
+        import learn_novye
+        inbox = _arg_value(raw_args, "--folder") or learn_novye.default_novye_dir()
+        if "--setup-inbox" in raw_args:
+            path = learn_novye.sozdat_papku_novye(inbox)
+            log("Папка готова: %s" % path, "ok")
+            if "--learn-inbox" not in raw_args and "--watch" not in raw_args:
+                return 0
+        if "--watch" in raw_args:
+            return learn_novye.watch_inbox(inbox) or 0
+        itog = learn_novye.process_inbox(inbox, force=force)
+        log()
+        log(opisanie_itoga(itog), "err" if itog["errors"] else "ok")
+        return 1 if itog["errors"] else 0
 
     if "--learn-oboi" in raw_args:
         try:

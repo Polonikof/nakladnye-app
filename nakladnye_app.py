@@ -22,9 +22,10 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 import convert_nakladnaya as core
+import learn_novye
 
 APP_NAME = "Накладные: Витебск + Обои"
-APP_VERSION = "1.0"
+APP_VERSION = "1.1"
 
 BG = "#f4f5f7"
 CARD = "#ffffff"
@@ -105,7 +106,9 @@ class App(tk.Tk):
         self.messages = queue.Queue()
         self.worker = None
         self.folder = tk.StringVar(value=core.app_dir())
+        self.inbox = tk.StringVar(value=learn_novye.default_novye_dir())
         self.force = tk.BooleanVar(value=False)
+        self.mode_learn = False
 
         self.f_ui = pick_font(["Segoe UI", "Inter", "DejaVu Sans", "Helvetica"], 10)
         self.f_ui_bold = pick_font(["Segoe UI", "Inter", "DejaVu Sans", "Helvetica"], 10, weight="bold")
@@ -151,7 +154,7 @@ class App(tk.Tk):
         root = ttk.Frame(self, padding=(18, 16, 18, 14))
         root.pack(fill="both", expand=True)
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(5, weight=1)
+        root.rowconfigure(7, weight=1)
 
         head = ttk.Frame(root)
         head.grid(row=0, column=0, sticky="ew")
@@ -191,14 +194,38 @@ class App(tk.Tk):
         ttk.Checkbutton(actions, text="Обрабатывать повторно (не учитывать журнал)",
                         variable=self.force).grid(row=0, column=1, padx=(16, 0))
 
+        # --- папка обучения
+        inbox_card = tk.Frame(root, bg=CARD, highlightbackground=BORDER,
+                              highlightthickness=1, bd=0)
+        inbox_card.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+        inbox_card.columnconfigure(1, weight=1)
+        ttk.Label(inbox_card, text="Папка НовыеНакладные:",
+                  style="CardMuted.TLabel").grid(row=0, column=0, padx=(12, 8), pady=(10, 2), sticky="w")
+        ttk.Label(inbox_card, textvariable=self.inbox, style="Path.TLabel",
+                  anchor="w").grid(row=0, column=1, sticky="ew", pady=(10, 2))
+        ttk.Button(inbox_card, text="Выбрать…", command=self._choose_inbox,
+                   width=12).grid(row=0, column=2, padx=(8, 10), pady=(8, 2))
+        ttk.Label(inbox_card,
+                  text="Сюда кладут пару: исходник + готовый файл. Агент допишет справочник для нового релиза.",
+                  style="CardMuted.TLabel").grid(row=1, column=0, columnspan=3,
+                                                 padx=12, pady=(0, 8), sticky="w")
+
+        learn_actions = ttk.Frame(root)
+        learn_actions.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(learn_actions, text="Создать папку НовыеНакладные",
+                   command=self._setup_inbox).grid(row=0, column=0, sticky="w")
+        self.learn_btn = ttk.Button(learn_actions, text="Обучить из НовыеНакладные",
+                                    command=self._start_learn)
+        self.learn_btn.grid(row=0, column=1, padx=(8, 0), sticky="w")
+
         self.progress = ttk.Progressbar(root, mode="indeterminate",
                                         style="Thin.Horizontal.TProgressbar")
-        self.progress.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        self.progress.grid(row=5, column=0, sticky="ew", pady=(12, 0))
         self.progress.grid_remove()
 
         # --- строка состояния
         self.status_box = tk.Frame(root, bg=STATUS_COLORS["idle"][0])
-        self.status_box.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        self.status_box.grid(row=5, column=0, sticky="ew", pady=(12, 0))
         self.status_lbl = tk.Label(self.status_box, text="", bg=STATUS_COLORS["idle"][0],
                                    fg=STATUS_COLORS["idle"][1], font=self.f_ui_bold,
                                    anchor="w", padx=12, pady=9, justify="left")
@@ -207,13 +234,13 @@ class App(tk.Tk):
 
         # --- журнал
         log_head = ttk.Frame(root)
-        log_head.grid(row=4, column=0, sticky="ew", pady=(14, 6))
+        log_head.grid(row=6, column=0, sticky="ew", pady=(14, 6))
         log_head.columnconfigure(0, weight=1)
         ttk.Label(log_head, text="Журнал обработки",
                   style="TLabel").grid(row=0, column=0, sticky="w")
 
         log_wrap = tk.Frame(root, bg=BORDER, bd=0, highlightthickness=0)
-        log_wrap.grid(row=5, column=0, sticky="nsew")
+        log_wrap.grid(row=7, column=0, sticky="nsew")
         log_wrap.columnconfigure(0, weight=1)
         log_wrap.rowconfigure(0, weight=1)
 
@@ -236,7 +263,7 @@ class App(tk.Tk):
 
         # --- нижние кнопки
         bottom = ttk.Frame(root)
-        bottom.grid(row=6, column=0, sticky="ew", pady=(10, 0))
+        bottom.grid(row=8, column=0, sticky="ew", pady=(10, 0))
         bottom.columnconfigure(3, weight=1)
         self.open_btn = ttk.Button(bottom, text="Открыть папку с результатами",
                                    command=self._open_folder)
@@ -291,6 +318,9 @@ class App(tk.Tk):
         self._append("Положите накладные в папку, указанную выше, и нажмите", "muted")
         self._append("«Обработать файлы». Результаты появятся в той же папке", "muted")
         self._append("с суффиксом «_Обработано».", "muted")
+        self._append("", "muted")
+        self._append("Новый формат: положите исходник и готовый файл в", "muted")
+        self._append("папку «НовыеНакладные» и нажмите «Обучить из НовыеНакладные».", "muted")
         self._append("=" * 60)
 
     def _set_status(self, text, kind="idle"):
@@ -307,6 +337,28 @@ class App(tk.Tk):
         if chosen:
             self.folder.set(os.path.abspath(chosen))
             self._append(f"Рабочая папка: {self.folder.get()}", "muted")
+
+    def _choose_inbox(self):
+        if self.worker and self.worker.is_alive():
+            return
+        chosen = filedialog.askdirectory(title="Папка НовыеНакладные",
+                                         initialdir=self.inbox.get())
+        if chosen:
+            self.inbox.set(os.path.abspath(chosen))
+            self._append(f"Папка обучения: {self.inbox.get()}", "muted")
+
+    def _setup_inbox(self):
+        if self.worker and self.worker.is_alive():
+            return
+        path = learn_novye.sozdat_papku_novye(self.inbox.get())
+        self.inbox.set(path)
+        self._append(f"Папка создана: {path}", "ok")
+        self._append("Положите туда исходник и готовый файл, затем нажмите «Обучить».", "muted")
+        self._set_status(f"Папка готова: {path}", "ok")
+        try:
+            open_in_explorer(path)
+        except Exception:
+            pass
 
     def _open_folder(self):
         path = self.folder.get()
@@ -345,6 +397,10 @@ class App(tk.Tk):
             return
 
         self.run_btn.configure(state="disabled", bg=ACCENT_OFF, text="Обработка…")
+        try:
+            self.learn_btn.configure(state="disabled")
+        except Exception:
+            pass
         self.status_box.grid_remove()
         self.progress.grid()
         self.progress.start(12)
@@ -355,12 +411,40 @@ class App(tk.Tk):
         self._append("=" * 60)
 
         force = self.force.get()
+        self.mode_learn = False
         self.worker = threading.Thread(target=self._work, args=(folder, force), daemon=True)
+        self.worker.start()
+
+    def _start_learn(self):
+        if self.worker and self.worker.is_alive():
+            return
+        folder = self.inbox.get()
+        self.run_btn.configure(state="disabled", bg=ACCENT_OFF, text="Обработка…")
+        self.learn_btn.configure(state="disabled")
+        self.status_box.grid_remove()
+        self.progress.grid()
+        self.progress.start(12)
+        self._set_status("Агент разбирает пару файлов…", "run")
+        self._append("", "info")
+        self._append(f"Обучение — {datetime.datetime.now():%d.%m.%Y %H:%M:%S}", "head")
+        self._append("=" * 60)
+        self.mode_learn = True
+        self.worker = threading.Thread(target=self._work_learn, args=(folder,), daemon=True)
         self.worker.start()
 
     def _work(self, folder, force):
         try:
             itog = core.process_folder(folder, force=force)
+        except Exception:
+            self._put("НЕОЖИДАННАЯ ОШИБКА:", "err")
+            for line in traceback.format_exc().rstrip().splitlines():
+                self._put("  " + line, "err")
+            itog = None
+        self.after(0, self._finish, itog)
+
+    def _work_learn(self, folder):
+        try:
+            itog = learn_novye.process_inbox(folder, catalog_folder=core.app_dir())
         except Exception:
             self._put("НЕОЖИДАННАЯ ОШИБКА:", "err")
             for line in traceback.format_exc().rstrip().splitlines():
@@ -375,6 +459,10 @@ class App(tk.Tk):
         self.progress.grid_remove()
         self.status_box.grid()
         self.run_btn.configure(state="normal", bg=ACCENT, text="Обработать файлы")
+        try:
+            self.learn_btn.configure(state="normal")
+        except Exception:
+            pass
 
         if itog is None:
             self._append("=" * 60)
@@ -430,6 +518,10 @@ class App(tk.Tk):
                     f"Результаты — в папке с накладными.")
         else:
             kind = "warn"
+        if getattr(self, "mode_learn", False) and done:
+            text = (f"Обучение готово. Пар: {len(done)}. "
+                    f"Справочник обновлён — это данные для нового релиза Накладные.exe.")
+            kind = "ok"
         self._set_status(text, kind)
 
     def _on_close(self):
