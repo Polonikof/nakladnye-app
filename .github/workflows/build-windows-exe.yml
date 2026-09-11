@@ -1,0 +1,55 @@
+name: Сборка Накладные.exe
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Зависимости
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Собрать exe
+        run: python -m PyInstaller --noconfirm --clean nakladnye.spec
+
+      - name: Имя файла для скачивания
+        shell: pwsh
+        run: |
+          Copy-Item -Force "dist\Накладные.exe" "dist\Nakladnye.exe"
+          Get-Item "dist\Nakladnye.exe" | Format-List Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nakladnye
+          path: dist/Nakladnye.exe
+
+      - name: Выложить в GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Nakladnye.exe
+          name: Накладные ${{ github.ref_name }}
+          body: |
+            Новая программа. Кнопка «Обучить» для папки C:\Накладные\НовыеНакладные.
+
+            Как поставить:
+            1. Скачайте Nakladnye.exe
+            2. Закройте старую программу
+            3. Замените файл C:\Накладные\Накладные.exe этим новым
+            4. Откройте его — в окне должна быть версия 1.1 и кнопка «Обучить»
+          fail_on_unmatched_files: true
