@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "unit": "шт",
+  "name_prefix": "Ковер",
+  "color_strip_slash_spaces": true,
+  "headers": {
+    "naim": "наим",
+    "unit": "ед изм",
+    "full": "полн наим",
+    "char": "харка"
+  },
+  "shape_letters": {
+    "D": "Прямоугольник",
+    "O": "Овал",
+    "C": "Круг"
+  },
+  "learned_from": "Готовый Юсуф №1643.xlsx"
+}

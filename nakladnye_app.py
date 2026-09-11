@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Оконное приложение для обработки накладных (Витебские ковры + Обои УПД).
+Оконное приложение для обработки накладных (Витебск, Обои, Юсуф).
 
 Одна кнопка «Обработать файлы» запускает обработку всех новых накладных
 в выбранной папке, ход работы построчно выводится в журнал ниже, а по
@@ -24,7 +24,7 @@ from tkinter import filedialog, font as tkfont, messagebox, ttk
 import convert_nakladnaya as core
 import learn_novye
 
-APP_NAME = "Накладные: Витебск + Обои"
+APP_NAME = "Накладные: Витебск, Обои, Юсуф"
 
 BG = "#f4f5f7"
 CARD = "#ffffff"
@@ -205,7 +205,7 @@ class App(tk.Tk):
         ttk.Button(inbox_card, text="Выбрать…", command=self._choose_inbox,
                    width=12).grid(row=0, column=2, padx=(8, 10), pady=(8, 2))
         ttk.Label(inbox_card,
-                  text="Сюда: два файла (исходник и готовый). Затем кнопка «Обучить».",
+                  text="Сюда: два файла (исходник и готовый), в том числе Юсуф. Затем «Обучить».",
                   style="CardMuted.TLabel").grid(row=1, column=0, columnspan=3,
                                                  padx=12, pady=(0, 8), sticky="w")
 
@@ -314,9 +314,10 @@ class App(tk.Tk):
 
     def _greeting(self):
         self._append(f"{APP_NAME}, версия {core.current_version()}", "head")
-        self._append("Приложение обрабатывает два вида накладных:", "muted")
+        self._append("Приложение обрабатывает три вида накладных:", "muted")
         self._append("  • Витебские ковры — фактура .xls", "muted")
         self._append("  • Обои — сырой УПД .xlsx (со словом «Обои» в наименованиях)", "muted")
+        self._append("  • Юсуф — packing list ковров .xlsx (Турция)", "muted")
         self._append("", "muted")
         self._append("Две кнопки:", "muted")
         self._append("  «Обработать файлы» — обычные накладные в C:\\Накладные", "muted")

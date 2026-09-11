@@ -6,7 +6,11 @@
   • исходник (как пришло от поставщика)
   • готовый (как обработали руками)
 
-Агент находит пару, разбирает её, дополняет oboi_catalog.json
+Агент находит пару, разбирает её:
+  • Обои — дополняет oboi_catalog.json
+  • Юсуф — запоминает формат packing list (колонки наим / харка)
+  • Витебск — архивирует эталон
+
 и готовит данные для нового релиза Накладные.exe.
 
     python learn_novye.py --setup
@@ -45,17 +49,21 @@ INSTRUCTION = """КАК РАБОТАТЬ
    - как пришло от поставщика (в имени напишите слово исходник)
    - как сделали руками        (в имени напишите слово готовый)
 
-   Пример:
+   Примеры:
    УПД_май_исходник.xlsx
    УПД_май_готовый.xlsx
+
+   Юсуф исходник №1643.xlsx
+   Готовый Юсуф №1643.xlsx
 
 2. Откройте Накладные.exe (лежит в C:\\Накладные).
 
 3. Нажмите кнопку «Обучить».
 
-4. Готово. Появится новый файл Накладные_1.2.1.exe
+4. Готово. Появится новый файл Накладные_1.3.1.exe
    в C:\\Накладные. Закройте старое окно и откройте его.
    Обычные накладные по-прежнему обрабатываются кнопкой «Обработать файлы».
+   Юсуф (packing list ковров) тоже кладите в C:\\Накладные и жмите «Обработать файлы».
 """
 
 
@@ -105,7 +113,7 @@ def _role_by_name(name):
 
 
 def _klass_puti(path):
-    """source_oboi | gotovyj_oboi | source_vitebsk | skip"""
+    """source_oboi | gotovyj_oboi | source_yusuf | gotovyj_yusuf | source_vitebsk | skip"""
     base = os.path.basename(path)
     if base.startswith("~$") or base.startswith("."):
         return "skip"
@@ -119,6 +127,12 @@ def _klass_puti(path):
         if core.eto_gotovyj_vitebsk(path):
             return "gotovyj_vitebsk"
         return "source_vitebsk" if by_name != "gotovyj" else "gotovyj_vitebsk"
+    if core.eto_yusuf_gotovyj(path) or (
+            by_name == "gotovyj" and (core._yusuf_v_imeni(path) or core.eto_packing_list(path))):
+        return "gotovyj_yusuf"
+    if core.eto_yusuf_syroj(path) or (
+            by_name == "source" and (core._yusuf_v_imeni(path) or core.eto_packing_list(path))):
+        return "source_yusuf"
     if core.eto_oboi_gotovyj(path) or by_name == "gotovyj":
         return "gotovyj_oboi"
     if core.eto_oboi_syroj(path) or by_name == "source":
@@ -165,9 +179,12 @@ def naiti_pary(folder):
     for directory, items in sorted(by_dir.items()):
         sources_o = [p for p, k in items if k == "source_oboi"]
         gotovye_o = [p for p, k in items if k == "gotovyj_oboi"]
+        sources_y = [p for p, k in items if k == "source_yusuf"]
+        gotovye_y = [p for p, k in items if k == "gotovyj_yusuf"]
         sources_v = [p for p, k in items if k == "source_vitebsk"]
         gotovye_v = [p for p, k in items if k == "gotovyj_vitebsk"]
         pairs.extend(_match(directory, "oboi", sources_o, gotovye_o))
+        pairs.extend(_match(directory, "yusuf", sources_y, gotovye_y))
         pairs.extend(_match(directory, "vitebsk", sources_v, gotovye_v))
     return pairs
 
@@ -320,6 +337,42 @@ def obuchit_po_pare(pair, catalog_folder=None):
         report["ok"] = True
         return report
 
+    if kind == "yusuf":
+        profile, prof_path, n_learned = core.learn_yusuf_from_gotovyj(
+            gotovyj, folder=catalog_folder)
+        report["rows"] = n_learned
+        report["added"] = n_learned
+        tmp_out = os.path.join(os.path.dirname(source), "_проверка_юсуф.xlsx")
+        try:
+            rows, out_path = core.convert_yusuf(source, tmp_out, profile=profile)
+            report["rows"] = rows
+            diffs = core.sravnit_yusuf(out_path, gotovyj)
+            report["diffs"] = diffs
+            if diffs:
+                report["message"] = (
+                    "Формат Юсуфа сохранён, но сверка с эталоном дала %s расхождений"
+                    % len(diffs))
+                log(report["message"], "warn")
+                for line in diffs[:15]:
+                    log("    " + line, "warn")
+            else:
+                report["message"] = (
+                    "Формат Юсуфа сохранён (%s), сверка с эталоном: 0 расхождений"
+                    % os.path.basename(prof_path))
+                log(report["message"], "ok")
+            report["ok"] = True
+        except Exception as exc:
+            report["message"] = "Профиль Юсуфа сохранён, проверка исходника не удалась: %s" % exc
+            log(report["message"], "warn")
+            report["ok"] = True
+        finally:
+            if os.path.exists(tmp_out):
+                try:
+                    os.remove(tmp_out)
+                except OSError:
+                    pass
+        return report
+
     before = core.load_oboi_catalog(catalog_folder)
     core.learn_oboi_catalog_from_gotovyj(gotovyj, folder=catalog_folder)
     after = core.load_oboi_catalog(catalog_folder)
@@ -374,7 +427,7 @@ def vypustit_novyj_exe(catalog_folder, version):
     """
     Копирует текущую программу в новый .exe с номером версии в имени.
     Пока открыт старый файл, Windows не даёт его перезаписать — поэтому
-    новый файл всегда с другим именем: Накладные_1.2.1.exe
+    новый файл всегда с другим именем: Накладные_1.3.1.exe
     """
     catalog_folder = os.path.abspath(catalog_folder)
     name = "Накладные_%s.exe" % version
@@ -396,6 +449,11 @@ def vypustit_novyj_exe(catalog_folder, version):
     cat = os.path.join(catalog_folder, core.OBOI_CATALOG_FILENAME)
     if os.path.exists(cat):
         shutil.copy2(cat, os.path.join(pack_dir, core.OBOI_CATALOG_FILENAME))
+    yusuf_prof = os.path.join(catalog_folder, core.YUSUF_PROFILE_FILENAME)
+    if not os.path.exists(yusuf_prof):
+        yusuf_prof = core.yusuf_profile_path(catalog_folder)
+    if os.path.exists(yusuf_prof):
+        shutil.copy2(yusuf_prof, os.path.join(pack_dir, core.YUSUF_PROFILE_FILENAME))
     core.save_version(version, catalog_folder)
     core.save_version(version, pack_dir)
 
@@ -447,6 +505,9 @@ def zapisat_obnovlenie(reports, catalog_folder=None, release_info=None):
         "",
         "Добавлено артикулов: %s" % added,
         "Обновлено артикулов: %s" % updated,
+        "",
+        "Юсуф (packing list): %s" % os.path.join(
+            catalog_folder, core.YUSUF_PROFILE_FILENAME),
         "",
         "Время: %s" % datetime.datetime.now().strftime("%d.%m.%Y %H:%M"),
         "",
@@ -502,9 +563,13 @@ def process_inbox(folder=None, force=False, catalog_folder=None):
             arch = _arhivirovat(folder, pair, text)
             log("Архив пары: %s" % arch, "muted")
             itog["reports"].append(report)
+            out_name = (
+                core.YUSUF_PROFILE_FILENAME if report["kind"] == "yusuf"
+                else core.OBOI_CATALOG_FILENAME
+            )
             itog["done"].append({
                 "src": report["source"],
-                "out": core.OBOI_CATALOG_FILENAME,
+                "out": out_name,
                 "rows": report["rows"],
                 "type": "learn-" + report["kind"],
             })

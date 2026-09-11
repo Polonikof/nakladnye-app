@@ -26,7 +26,7 @@ a = Analysis(
     ["nakladnye_app.py"],
     pathex=[],
     binaries=_extra_binaries,
-    datas=[("oboi_catalog.json", ".")],
+    datas=[("oboi_catalog.json", "."), ("yusuf_profile.json", ".")],
     hiddenimports=["xlrd", "openpyxl", "learn_novye"],
     hookspath=[],
     runtime_hooks=[],
