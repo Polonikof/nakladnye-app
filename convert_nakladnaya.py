@@ -137,6 +137,46 @@ def app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+VERSION_FILENAME = "version.txt"
+BUILT_IN_VERSION = "1.2"
+
+
+def current_version():
+    """Версия на диске (после «Обучить») или встроенная в сборку."""
+    path = os.path.join(app_dir(), VERSION_FILENAME)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                v = f.read().strip().splitlines()[0].strip()
+            if v:
+                return v
+        except Exception:
+            pass
+    return BUILT_IN_VERSION
+
+
+def save_version(version, folder=None):
+    folder = folder or app_dir()
+    path = os.path.join(folder, VERSION_FILENAME)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(str(version).strip() + "\n")
+    return path
+
+
+def bump_patch(version):
+    parts = [p for p in str(version).split(".") if p != ""]
+    nums = []
+    for p in parts:
+        try:
+            nums.append(int(p))
+        except ValueError:
+            nums.append(0)
+    while len(nums) < 3:
+        nums.append(0)
+    nums[-1] += 1
+    return ".".join(str(n) for n in nums)
+
+
 def bundle_dir():
     """Папка с ресурсами, вшитыми в onefile-сборку (справочник по умолчанию)."""
     return getattr(sys, "_MEIPASS", app_dir())

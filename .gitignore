@@ -20,7 +20,10 @@ dist-win/
 *.manifest
 diag.spec
 
-# Результаты прогонов / временные файлы
+version.txt
+ЧТО_ОБНОВИЛОСЬ.txt
+релизы/
+Открыть_Накладные_*.bat
 *_Обработано.xlsx
 *_Обработано\ (*).xlsx
 samples/out_*.xlsx

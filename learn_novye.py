@@ -53,7 +53,8 @@ INSTRUCTION = """КАК РАБОТАТЬ
 
 3. Нажмите кнопку «Обучить».
 
-4. Готово. Программа запомнила новые позиции.
+4. Готово. Появится новый файл Накладные_1.2.1.exe
+   в C:\\Накладные. Закройте старое окно и откройте его.
    Обычные накладные по-прежнему обрабатываются кнопкой «Обработать файлы».
 """
 
@@ -362,53 +363,102 @@ def obuchit_po_pare(pair, catalog_folder=None):
 
 
 def bump_app_version(new_version=None):
-    """Поднимает APP_VERSION в nakladnye_app.py (патч +0.1, если версия не задана)."""
-    path = os.path.join(core.app_dir(), "nakladnye_app.py")
-    if not os.path.exists(path):
-        return None
-    with open(path, "r", encoding="utf-8") as f:
-        text = f.read()
-    m = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', text)
-    if not m:
-        return None
-    old = m.group(1)
-    if new_version is None:
-        parts = old.split(".")
-        if len(parts) >= 2 and parts[1].isdigit():
-            parts[1] = str(int(parts[1]) + 1)
-            new_version = ".".join(parts)
-        else:
-            new_version = old + ".1"
-    text = text[:m.start(1)] + new_version + text[m.end(1):]
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
-    return old, new_version
+    """Поднимает номер версии на диске (version.txt)."""
+    old = core.current_version()
+    version = new_version or core.bump_patch(old)
+    core.save_version(version)
+    return old, version
 
 
-def zapisat_reliz(reports, catalog_folder=None):
-    """Пишет release/LEARNED.md — что вошло в следующий релиз .exe."""
+def vypustit_novyj_exe(catalog_folder, version):
+    """
+    Копирует текущую программу в новый .exe с номером версии в имени.
+    Пока открыт старый файл, Windows не даёт его перезаписать — поэтому
+    новый файл всегда с другим именем: Накладные_1.2.1.exe
+    """
+    catalog_folder = os.path.abspath(catalog_folder)
+    name = "Накладные_%s.exe" % version
+    visible = os.path.join(catalog_folder, name)
+    pack_dir = os.path.join(catalog_folder, "релизы", "Накладные_%s" % version)
+    os.makedirs(pack_dir, exist_ok=True)
+    pack_exe = os.path.join(pack_dir, name)
+
+    if getattr(sys, "frozen", False):
+        src = os.path.abspath(sys.executable)
+    else:
+        log("Сейчас запуск не из .exe — копирую исходники нельзя. "
+            "Соберите программу через build_exe.bat.", "warn")
+        return None
+
+    shutil.copy2(src, visible)
+    shutil.copy2(src, pack_exe)
+
+    cat = os.path.join(catalog_folder, core.OBOI_CATALOG_FILENAME)
+    if os.path.exists(cat):
+        shutil.copy2(cat, os.path.join(pack_dir, core.OBOI_CATALOG_FILENAME))
+    core.save_version(version, catalog_folder)
+    core.save_version(version, pack_dir)
+
+    bat = os.path.join(catalog_folder, "Открыть_Накладные_%s.bat" % version)
+    with open(bat, "w", encoding="utf-8") as f:
+        f.write("@echo off\r\n")
+        f.write("start \"\" \"%~dp0%s\"\r\n" % name)
+
+    log("Новая программа: %s" % visible, "ok")
+    log("Копия в архиве релизов: %s" % pack_exe, "ok")
+    return {
+        "version": version,
+        "exe": visible,
+        "pack_dir": pack_dir,
+        "pack_exe": pack_exe,
+        "bat": bat,
+    }
+
+
+def zapisat_obnovlenie(reports, catalog_folder=None, release_info=None):
+    """Пишет рядом с программой файл ЧТО_ОБНОВИЛОСЬ.txt."""
     catalog_folder = catalog_folder or core.app_dir()
-    rel_dir = os.path.join(catalog_folder, "release")
-    os.makedirs(rel_dir, exist_ok=True)
+    cat_path = os.path.join(catalog_folder, core.OBOI_CATALOG_FILENAME)
+    if not os.path.exists(cat_path):
+        cat_path = core.oboi_catalog_path(catalog_folder)
+    added = sum(r.get("added", 0) for r in reports)
+    updated = sum(r.get("updated", 0) for r in reports)
     lines = [
-        "Обучение %s" % datetime.datetime.now().strftime("%d.%m.%Y %H:%M"),
+        "ЧТО ОБНОВИЛОСЬ ПОСЛЕ КНОПКИ «Обучить»",
+        "",
+    ]
+    if release_info and release_info.get("exe"):
+        lines += [
+            "Новая программа:",
+            release_info["exe"],
+            "",
+            "Закройте старое окно и откройте этот файл.",
+            "Или двойной щелчок: %s" % os.path.basename(release_info.get("bat") or ""),
+            "",
+        ]
+    else:
+        lines += [
+            "Файл .exe не скопирован (запуск был не из программы, а из Python).",
+            "",
+        ]
+    lines += [
+        "Справочник (новые позиции):",
+        cat_path,
+        "",
+        "Добавлено артикулов: %s" % added,
+        "Обновлено артикулов: %s" % updated,
+        "",
+        "Время: %s" % datetime.datetime.now().strftime("%d.%m.%Y %H:%M"),
         "",
     ]
     for r in reports:
-        lines.append("- [%s] %s + %s → +%s арт., обновлено %s. %s" % (
-            r["kind"], r["source"], r["gotovyj"], r["added"], r["updated"], r["message"]))
-    lines.append("")
-    lines.append("Справочник: oboi_catalog.json рядом с Накладные.exe.")
-    lines.append("Чтобы вшить в новый exe: build_exe.bat")
-    path = os.path.join(rel_dir, "LEARNED.md")
+        lines.append("- %s + %s: +%s новых, %s обновлено. %s" % (
+            r["source"], r["gotovyj"], r["added"], r["updated"], r["message"]))
+    path = os.path.join(catalog_folder, "ЧТО_ОБНОВИЛОСЬ.txt")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    cat_src = os.path.join(catalog_folder, core.OBOI_CATALOG_FILENAME)
-    if not os.path.exists(cat_src):
-        cat_src = core.oboi_catalog_path(catalog_folder)
-    if os.path.exists(cat_src):
-        shutil.copy2(cat_src, os.path.join(rel_dir, core.OBOI_CATALOG_FILENAME))
-    return path
+    log("Памятка: %s" % path, "muted")
+    return path, cat_path
 
 
 def process_inbox(folder=None, force=False, catalog_folder=None):
@@ -425,6 +475,7 @@ def process_inbox(folder=None, force=False, catalog_folder=None):
         "seconds": 0.0,
         "reports": [],
         "learned": True,
+        "catalog_path": os.path.join(catalog_folder, core.OBOI_CATALOG_FILENAME),
     }
 
     log("Папка обучения: %s" % folder, "head")
@@ -468,12 +519,29 @@ def process_inbox(folder=None, force=False, catalog_folder=None):
     _save_state(folder, state)
 
     if itog["reports"]:
-        zapisat_reliz(itog["reports"], catalog_folder=catalog_folder)
-        added = sum(r["added"] for r in itog["reports"])
-        if added:
-            bumped = bump_app_version()
-            if bumped:
-                log("Версия приложения: %s → %s (новый релиз справочника)" % bumped, "ok")
+        old_v, new_v = bump_app_version()
+        log("Версия программы: %s → %s" % (old_v, new_v), "ok")
+        release_info = None
+        try:
+            release_info = vypustit_novyj_exe(catalog_folder, new_v)
+        except Exception as exc:
+            log("Не удалось скопировать .exe: %s" % exc, "err")
+            itog["errors"].append(("exe", str(exc)))
+        note, cat_path = zapisat_obnovlenie(
+            itog["reports"], catalog_folder=catalog_folder, release_info=release_info
+        )
+        itog["catalog_path"] = cat_path
+        itog["note_path"] = note
+        itog["version"] = new_v
+        if release_info:
+            itog["new_exe"] = release_info["exe"]
+            itog["pack_dir"] = release_info["pack_dir"]
+            itog["done"].append({
+                "src": "релиз",
+                "out": release_info["exe"],
+                "rows": 0,
+                "type": "exe",
+            })
 
     itog["seconds"] = (datetime.datetime.now() - started).total_seconds()
     return itog

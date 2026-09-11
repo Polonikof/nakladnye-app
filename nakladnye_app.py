@@ -25,7 +25,6 @@ import convert_nakladnaya as core
 import learn_novye
 
 APP_NAME = "Накладные: Витебск + Обои"
-APP_VERSION = "1.1"
 
 BG = "#f4f5f7"
 CARD = "#ffffff"
@@ -98,7 +97,7 @@ class QueueWriter:
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME} — v{APP_VERSION}")
+        self.title(f"{APP_NAME} — v{core.current_version()}")
         self.geometry("940x680")
         self.minsize(760, 560)
         self.configure(bg=BG)
@@ -275,7 +274,8 @@ class App(tk.Tk):
                    command=self._save_log).grid(row=0, column=1, padx=8)
         ttk.Button(bottom, text="Очистить",
                    command=self._clear_log).grid(row=0, column=2)
-        ttk.Label(bottom, text=f"v{APP_VERSION}", style="Muted.TLabel").grid(row=0, column=3, sticky="e")
+        self.version_lbl = ttk.Label(bottom, text=f"v{core.current_version()}", style="Muted.TLabel")
+        self.version_lbl.grid(row=0, column=3, sticky="e")
 
     def _hover(self, on):
         if str(self.run_btn["state"]) != "disabled":
@@ -313,7 +313,7 @@ class App(tk.Tk):
         self.log.configure(state="disabled")
 
     def _greeting(self):
-        self._append(f"{APP_NAME}, версия {APP_VERSION}", "head")
+        self._append(f"{APP_NAME}, версия {core.current_version()}", "head")
         self._append("Приложение обрабатывает два вида накладных:", "muted")
         self._append("  • Витебские ковры — фактура .xls", "muted")
         self._append("  • Обои — сырой УПД .xlsx (со словом «Обои» в наименованиях)", "muted")
@@ -520,9 +520,38 @@ class App(tk.Tk):
         else:
             kind = "warn"
         if getattr(self, "mode_learn", False) and done:
-            text = (f"Обучение готово. Пар: {len(done)}. "
-                    f"Справочник обновлён — это данные для нового релиза Накладные.exe.")
-            kind = "ok"
+            exe = itog.get("new_exe")
+            ver = itog.get("version") or core.current_version()
+            self.title(f"{APP_NAME} — v{ver}")
+            try:
+                self.version_lbl.configure(text=f"v{ver}")
+            except Exception:
+                pass
+            if exe:
+                self._append(f"Новая программа v{ver}:", "ok")
+                self._append(exe, "ok")
+                self._append("Закройте это окно и откройте новый файл.", "muted")
+                text = f"Готово. Новая программа: {os.path.basename(exe)}"
+                kind = "ok"
+                try:
+                    if sys.platform.startswith("win"):
+                        subprocess.Popen(
+                            ["explorer", "/select,", os.path.abspath(exe)]
+                        )
+                    else:
+                        open_in_explorer(os.path.dirname(exe))
+                except Exception:
+                    pass
+                messagebox.showinfo(
+                    APP_NAME,
+                    f"Новая программа сохранена:\n\n{exe}\n\n"
+                    f"Закройте это окно и откройте файл\nНакладные_{ver}.exe"
+                )
+            else:
+                cat = itog.get("catalog_path") or ""
+                self._append(f"Справочник обновлён: {cat}", "ok")
+                text = "Обучение готово. Файл .exe появится, если запустить Накладные.exe (не Python)."
+                kind = "warn"
         self._set_status(text, kind)
 
     def _on_close(self):
