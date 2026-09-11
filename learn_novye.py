@@ -23,6 +23,7 @@ from __future__ import print_function
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -56,11 +57,14 @@ INSTRUCTION = """КАК РАБОТАТЬ
    Юсуф исходник №1643.xlsx
    Готовый Юсуф №1643.xlsx
 
+   Если исходник тот же, а готовый файл другой (или вы поправили
+   готовый и сохранили), правила этого типа накладных перезапишутся.
+
 2. Откройте Накладные.exe (лежит в C:\\Накладные).
 
 3. Нажмите кнопку «Обучить».
 
-4. Готово. Появится новый файл Накладные_1.3.1.exe
+4. Готово. Появится новый файл Накладные_1.4.1.exe
    в C:\\Накладные. Закройте старое окно и откройте его.
    Обычные накладные по-прежнему обрабатываются кнопкой «Обработать файлы».
    Юсуф (packing list ковров) тоже кладите в C:\\Накладные и жмите «Обработать файлы».
@@ -156,6 +160,21 @@ def _stem_score(a, b):
     return len(ta & tb) / float(len(ta | tb))
 
 
+def _file_sig(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
 def _excel_files(folder):
     out = []
     for root, dirs, files in os.walk(folder):
@@ -195,21 +214,28 @@ def _match(directory, kind, sources, gotovye):
     for src in sources:
         best = None
         best_score = -1
+        best_mtime = -1
         for got in gotovye:
             if got in used_g:
                 continue
             score = _stem_score(os.path.basename(src), os.path.basename(got))
-            if len(sources) == 1 and len(gotovye) == 1:
+            if len(sources) == 1:
                 score = max(score, 1.0)
-            if score > best_score:
+            mt = _mtime(got)
+            better = score > best_score + 1e-9
+            same = abs(score - best_score) <= 1e-9 and mt >= best_mtime
+            if better or same:
                 best_score = score
+                best_mtime = mt
                 best = got
         if best is None or best_score < 0.15:
             continue
         used_g.add(best)
-        ident = "%s|%s|%s" % (kind, os.path.basename(src), os.path.basename(best))
+        src_name = os.path.basename(src)
+        got_name = os.path.basename(best)
         pairs.append({
-            "id": ident,
+            "id": "%s|%s|%s" % (kind, src_name, got_name),
+            "source_key": "%s|%s" % (kind, src_name),
             "kind": kind,
             "folder": directory,
             "source": src,
@@ -339,7 +365,7 @@ def obuchit_po_pare(pair, catalog_folder=None):
 
     if kind == "yusuf":
         profile, prof_path, n_learned = core.learn_yusuf_from_gotovyj(
-            gotovyj, folder=catalog_folder)
+            gotovyj, folder=catalog_folder, source_path=source)
         report["rows"] = n_learned
         report["added"] = n_learned
         tmp_out = os.path.join(os.path.dirname(source), "_проверка_юсуф.xlsx")
@@ -427,7 +453,7 @@ def vypustit_novyj_exe(catalog_folder, version):
     """
     Копирует текущую программу в новый .exe с номером версии в имени.
     Пока открыт старый файл, Windows не даёт его перезаписать — поэтому
-    новый файл всегда с другим именем: Накладные_1.3.1.exe
+    новый файл всегда с другим именем: Накладные_1.4.1.exe
     """
     catalog_folder = os.path.abspath(catalog_folder)
     name = "Накладные_%s.exe" % version
@@ -543,7 +569,7 @@ def process_inbox(folder=None, force=False, catalog_folder=None):
     log("Справочник: %s" % core.oboi_catalog_path(catalog_folder))
     pairs = naiti_pary(folder)
     state = _load_state(folder)
-    done_ids = set(state.get("done", []))
+    by_source = state.get("by_source") or {}
 
     if not pairs:
         log("Пар «исходник + готовый» не найдено.", "warn")
@@ -553,10 +579,16 @@ def process_inbox(folder=None, force=False, catalog_folder=None):
 
     log("Найдено пар: %s" % len(pairs))
     for pair in pairs:
-        if not force and pair["id"] in done_ids:
-            itog["skipped"].append(pair["id"])
-            log("Уже обучен: %s" % pair["id"], "muted")
+        key = pair.get("source_key") or pair["id"]
+        sig = _file_sig(pair["gotovyj"])
+        prev = by_source.get(key)
+        if not force and prev and prev.get("sig") == sig:
+            itog["skipped"].append(key)
+            log("Уже обучен (готовый не менялся): %s" % os.path.basename(pair["source"]), "muted")
             continue
+        if prev and prev.get("sig") != sig:
+            log("Исходник тот же, готовый файл другой — "
+                "перезаписываю правила (%s)." % pair["kind"], "ok")
         try:
             report = obuchit_po_pare(pair, catalog_folder=catalog_folder)
             text = json.dumps(report, ensure_ascii=False, indent=2)
@@ -574,12 +606,18 @@ def process_inbox(folder=None, force=False, catalog_folder=None):
                 "type": "learn-" + report["kind"],
             })
             itog["rows"] += report["rows"]
-            done_ids.add(pair["id"])
+            by_source[key] = {
+                "gotovyj": os.path.basename(pair["gotovyj"]),
+                "sig": sig,
+                "kind": pair["kind"],
+                "learned_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
         except Exception as exc:
             itog["errors"].append((pair["id"], str(exc)))
             log("ОШИБКА пары %s: %s" % (pair["id"], exc), "err")
 
-    state["done"] = sorted(done_ids)
+    state["by_source"] = by_source
+    state["done"] = sorted(by_source.keys())
     state["updated_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _save_state(folder, state)
 

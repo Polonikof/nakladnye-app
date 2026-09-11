@@ -141,7 +141,7 @@ def app_dir():
 
 
 VERSION_FILENAME = "version.txt"
-BUILT_IN_VERSION = "1.3"
+BUILT_IN_VERSION = "1.4"
 
 
 def current_version():
@@ -499,6 +499,10 @@ def default_yusuf_profile():
         "unit": "шт",
         "name_prefix": "Ковер",
         "color_strip_slash_spaces": True,
+        "meter_decimal": ",",
+        "naim_template": "{collection} {w_m}*{l_m} {forma}",
+        "full_template": "{prefix} {naim}",
+        "char_template": "{design} {color}",
         "headers": {
             "naim": "наим",
             "unit": "ед изм",
@@ -584,7 +588,7 @@ def yusuf_sm_kak_chislo(v):
     return n
 
 
-def yusuf_sm_v_metry_str(v):
+def yusuf_sm_v_metry_str(v, profile=None):
     """Сантиметры → метры для наименования: 200→2, 150→1,5, 80→0,8."""
     n = _yusuf_chislo(v)
     if n is None:
@@ -593,7 +597,18 @@ def yusuf_sm_v_metry_str(v):
         n = n / 100.0
     if abs(n - round(n)) < 1e-9:
         n = int(round(n))
-    return norm_num(n)
+    s = norm_num(n)
+    dec = (profile or {}).get("meter_decimal", ",")
+    if dec == ".":
+        s = s.replace(",", ".")
+    return s
+
+
+def _yusuf_podstavit(tpl, mapping):
+    out = str(tpl or "")
+    for k in sorted(mapping, key=lambda x: -len(x)):
+        out = out.replace("{" + k + "}", str(mapping[k]))
+    return out
 
 
 def yusuf_bukva_formy(size_shape):
@@ -637,19 +652,34 @@ def yusuf_dop_polya(raw, profile=None):
     design = str(raw.get("design") or "").strip()
     w_cm = yusuf_sm_kak_chislo(raw.get("width"))
     l_cm = yusuf_sm_kak_chislo(raw.get("length"))
-    naim = ("%s %s*%s %s" % (
-        coll, yusuf_sm_v_metry_str(raw.get("width")),
-        yusuf_sm_v_metry_str(raw.get("length")), forma)).strip()
     prefix = profile.get("name_prefix") or "Ковер"
     unit = profile.get("unit") or "шт"
+    mapping = {
+        "collection": coll,
+        "design": design,
+        "color": color,
+        "w_m": yusuf_sm_v_metry_str(raw.get("width"), profile),
+        "l_m": yusuf_sm_v_metry_str(raw.get("length"), profile),
+        "w_cm": "" if w_cm is None else str(w_cm),
+        "l_cm": "" if l_cm is None else str(l_cm),
+        "forma": forma,
+        "letter": letter or "D",
+        "prefix": prefix,
+        "unit": unit,
+    }
+    naim_tpl = profile.get("naim_template") or "{collection} {w_m}*{l_m} {forma}"
+    naim = _yusuf_podstavit(naim_tpl, mapping).strip()
+    mapping["naim"] = naim
+    full_tpl = profile.get("full_template") or "{prefix} {naim}"
+    char_tpl = profile.get("char_template") or "{design} {color}"
     return {
         "width_cm": w_cm,
         "length_cm": l_cm,
         "letter": letter or "D",
         "naim": naim,
         "unit": unit,
-        "full": ("%s %s" % (prefix, naim)).strip(),
-        "char": ("%s %s" % (design, color)).strip(),
+        "full": _yusuf_podstavit(full_tpl, mapping).strip(),
+        "char": _yusuf_podstavit(char_tpl, mapping).strip(),
         "color": color,
         "forma": forma,
     }
@@ -964,52 +994,192 @@ def sravnit_yusuf(out_path, got_path):
     return diffs
 
 
-def learn_yusuf_from_gotovyj(got_path, folder=None):
-    """Запоминает буквы формы и подписи колонок из эталона Юсуфа."""
-    profile = load_yusuf_profile(folder)
+def _yusuf_chastoe(items, default):
+    counts = {}
+    for it in items:
+        if not it:
+            continue
+        counts[it] = counts.get(it, 0) + 1
+    if not counts:
+        return default
+    return sorted(counts.items(), key=lambda x: (-x[1], x[0]))[0][0]
+
+
+def _yusuf_shablon_naim(naim, coll, w_m, l_m, forma):
+    s = str(naim or "")
+    if coll and s.startswith(coll):
+        s = "{collection}" + s[len(coll):]
+    if forma and s.endswith(forma):
+        s = s[:-len(forma)] + "{forma}"
+    if w_m and w_m in s:
+        s = s.replace(w_m, "{w_m}", 1)
+    if l_m and l_m in s:
+        s = s.replace(l_m, "{l_m}", 1)
+    return s
+
+
+def _yusuf_shablon_prosto(text, mapping):
+    s = str(text or "")
+    items = [(len(str(v)), k, str(v)) for k, v in mapping.items() if str(v)]
+    items.sort(reverse=True)
+    for _, k, v in items:
+        if v and v in s:
+            s = s.replace(v, "{" + k + "}", 1)
+    return s
+
+
+def chitat_yusuf_gotovye_polya(got_path):
     wb = load_workbook(got_path, data_only=True)
     ws = wb[wb.sheetnames[0]]
     header_row, sub_row, data_start, cols = nayti_yusuf_shapku(ws)
-    label_row = sub_row or header_row
-    headers = dict(profile.get("headers") or default_yusuf_profile()["headers"])
-    for key, col in (("naim", 15), ("unit", 16), ("full", 17), ("char", 18)):
-        val = ws.cell(label_row, col).value
-        if val:
-            headers[key] = str(val).strip()
-    profile["headers"] = headers
-    letters = dict(profile.get("shape_letters") or YUSUF_SHAPE_DEFAULT)
-    n_rows = 0
+    rows = []
     for r in range(data_start, ws.max_row + 1):
         npp = ws.cell(r, cols["npp"]).value
         if _yusuf_eto_itog(npp):
             break
         try:
-            int(float(npp))
+            npp_n = int(float(npp))
         except Exception:
             continue
-        naim = str(ws.cell(r, 15).value or "").strip()
-        letter = str(ws.cell(r, 14).value or "").strip().upper()
-        if not naim or not letter:
+        coll = str(ws.cell(r, cols["collection"]).value or "").strip()
+        if not coll:
+            continue
+        rows.append({
+            "row": r,
+            "npp": npp_n,
+            "collection": coll,
+            "design": str(ws.cell(r, cols["design"]).value or "").strip(),
+            "color": str(ws.cell(r, 4).value or "").strip(),
+            "width": ws.cell(r, cols["width"]).value,
+            "length": ws.cell(r, cols["length"]).value,
+            "width_cm": ws.cell(r, 12).value,
+            "length_cm": ws.cell(r, 13).value,
+            "letter": str(ws.cell(r, 14).value or "").strip(),
+            "naim": str(ws.cell(r, 15).value or "").strip(),
+            "unit": str(ws.cell(r, 16).value or "").strip(),
+            "full": str(ws.cell(r, 17).value or "").strip(),
+            "char": str(ws.cell(r, 18).value or "").strip(),
+        })
+    wb.close()
+    return rows, header_row, sub_row
+
+
+def learn_yusuf_from_gotovyj(got_path, folder=None, source_path=None):
+    """Полностью перезаписывает правила Юсуфа по эталону (и исходнику, если есть)."""
+    profile = default_yusuf_profile()
+    got_rows, header_row, sub_row = chitat_yusuf_gotovye_polya(got_path)
+    wb = load_workbook(got_path, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    label_row = sub_row or header_row
+    headers = dict(default_yusuf_profile()["headers"])
+    for key, col in (("naim", 15), ("unit", 16), ("full", 17), ("char", 18)):
+        val = ws.cell(label_row, col).value
+        if val:
+            headers[key] = str(val).strip()
+    wb.close()
+    profile["headers"] = headers
+
+    letters = dict(YUSUF_SHAPE_DEFAULT)
+    units = []
+    prefixes = []
+    naim_tpls = []
+    full_tpls = []
+    char_tpls = []
+    strip_slash = []
+    decimals = []
+
+    src_by_row = {}
+    src_by_key = {}
+    if source_path and os.path.exists(source_path):
+        src_rows = chitat_yusuf_stroki(source_path)[0]
+        for raw in src_rows:
+            src_by_row[raw["row"]] = raw
+            src_by_key[(raw["collection"], raw["npp"], raw["design"])] = raw
+
+    n_rows = 0
+    for got in got_rows:
+        if not got["naim"]:
             continue
         n_rows += 1
-        forma = naim.split()[-1] if naim.split() else ""
+        letter = (got["letter"] or "").upper()
+        forma = got["naim"].split()[-1] if got["naim"].split() else ""
         if letter and forma:
             letters[letter] = forma
-        unit = ws.cell(r, 16).value
-        if unit:
-            profile["unit"] = str(unit).strip()
-        full = str(ws.cell(r, 17).value or "").strip()
-        if full.lower().startswith("ковер "):
-            profile["name_prefix"] = "Ковер"
-    wb.close()
+        if got["unit"]:
+            units.append(got["unit"])
+        raw = src_by_row.get(got["row"]) or src_by_key.get(
+            (got["collection"], got["npp"], got["design"]))
+        src_color = str(raw["color"]).strip() if raw else got["color"]
+        stripped = re.sub(r"\s*/\s*", "/", src_color)
+        if "/" in src_color:
+            if got["color"] == stripped and got["color"] != src_color:
+                strip_slash.append(True)
+            elif got["color"] == src_color and src_color != stripped:
+                strip_slash.append(False)
+
+        width = raw["width"] if raw else got["width"]
+        length = raw["length"] if raw else got["length"]
+        trial = dict(profile)
+        trial["shape_letters"] = letters
+        w_m = yusuf_sm_v_metry_str(width, trial)
+        l_m = yusuf_sm_v_metry_str(length, trial)
+        w_dot = w_m.replace(",", ".")
+        if w_m and w_m in got["naim"] and "," in w_m:
+            decimals.append(",")
+        elif w_dot and w_dot in got["naim"] and "." in w_dot:
+            decimals.append(".")
+
+        naim_tpls.append(_yusuf_shablon_naim(
+            got["naim"], got["collection"], w_m, l_m, forma))
+        if got["full"] and got["naim"] and got["full"].endswith(got["naim"]):
+            prefix = got["full"][:-len(got["naim"])].strip()
+            if prefix:
+                prefixes.append(prefix)
+                full_tpls.append("{prefix} {naim}" if got["full"] == prefix + " " + got["naim"]
+                                 else _yusuf_shablon_prosto(got["full"], {
+                                     "prefix": prefix, "naim": got["naim"]}))
+            else:
+                full_tpls.append("{naim}")
+        color_norm = yusuf_cvet(src_color, {"color_strip_slash_spaces": True})
+        char_tpls.append(_yusuf_shablon_prosto(got["char"], {
+            "design": got["design"],
+            "color": got["color"] or color_norm,
+        }))
+
     profile["shape_letters"] = letters
+    if units:
+        profile["unit"] = _yusuf_chastoe(units, profile["unit"])
+    if prefixes:
+        profile["name_prefix"] = _yusuf_chastoe(prefixes, profile["name_prefix"])
+    if naim_tpls:
+        profile["naim_template"] = _yusuf_chastoe(
+            naim_tpls, profile["naim_template"])
+    if full_tpls:
+        profile["full_template"] = _yusuf_chastoe(
+            full_tpls, profile["full_template"])
+    if char_tpls:
+        profile["char_template"] = _yusuf_chastoe(
+            char_tpls, profile["char_template"])
+    if decimals:
+        profile["meter_decimal"] = _yusuf_chastoe(decimals, ",")
+    if strip_slash:
+        profile["color_strip_slash_spaces"] = sum(1 for x in strip_slash if x) >= (
+            len(strip_slash) / 2.0)
+
     profile["enabled"] = True
     profile["learned_from"] = os.path.basename(got_path)
+    if source_path:
+        profile["learned_source"] = os.path.basename(source_path)
     profile["learned_rows"] = n_rows
     profile["learned_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     path = save_yusuf_profile(profile, folder)
-    log("Профиль Юсуфа: %s (%s строк, формы: %s)" % (
-        path, n_rows, ", ".join("%s→%s" % (k, v) for k, v in sorted(letters.items()))), "ok")
+    log("Правила Юсуфа перезаписаны: %s" % path, "ok")
+    log("  наим: %s" % profile.get("naim_template"))
+    log("  полн: %s" % profile.get("full_template"))
+    log("  харка: %s" % profile.get("char_template"))
+    log("  ед.изм: %s; формы: %s" % (
+        profile.get("unit"),
+        ", ".join("%s→%s" % (k, v) for k, v in sorted(letters.items()))))
     return profile, path, n_rows
 
 

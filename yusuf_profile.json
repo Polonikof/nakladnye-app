@@ -3,6 +3,10 @@
   "unit": "шт",
   "name_prefix": "Ковер",
   "color_strip_slash_spaces": true,
+  "meter_decimal": ",",
+  "naim_template": "{collection} {w_m}*{l_m} {forma}",
+  "full_template": "{prefix} {naim}",
+  "char_template": "{design} {color}",
   "headers": {
     "naim": "наим",
     "unit": "ед изм",

@@ -119,6 +119,82 @@ class YusufConvertTests(unittest.TestCase):
             shutil.rmtree(inbox, ignore_errors=True)
             shutil.rmtree(catalog, ignore_errors=True)
 
+    def test_skip_if_gotovyj_unchanged(self):
+        inbox = tempfile.mkdtemp(prefix="yusuf_skip_")
+        catalog = tempfile.mkdtemp(prefix="yusuf_cat_")
+        try:
+            shutil.copy2(SRC, os.path.join(inbox, "Юсуф исходник №1643.xlsx"))
+            shutil.copy2(GOT, os.path.join(inbox, "Готовый Юсуф №1643.xlsx"))
+            first = learn_novye.process_inbox(
+                inbox, force=False, catalog_folder=catalog)
+            self.assertTrue(first["reports"])
+            second = learn_novye.process_inbox(
+                inbox, force=False, catalog_folder=catalog)
+            self.assertEqual(second["reports"], [])
+            self.assertTrue(second["skipped"])
+        finally:
+            shutil.rmtree(inbox, ignore_errors=True)
+            shutil.rmtree(catalog, ignore_errors=True)
+
+    def test_relearn_overwrites_rules_when_gotovyj_changes(self):
+        from openpyxl import load_workbook
+
+        inbox = tempfile.mkdtemp(prefix="yusuf_relearn_")
+        catalog = tempfile.mkdtemp(prefix="yusuf_cat_")
+        try:
+            src_p = os.path.join(inbox, "Юсуф исходник №1643.xlsx")
+            got_p = os.path.join(inbox, "Готовый Юсуф №1643.xlsx")
+            shutil.copy2(SRC, src_p)
+            shutil.copy2(GOT, got_p)
+            first = learn_novye.process_inbox(
+                inbox, force=False, catalog_folder=catalog)
+            self.assertTrue(first["reports"])
+            prof = core.load_yusuf_profile(catalog)
+            self.assertEqual(prof.get("unit"), "шт")
+            self.assertEqual(prof.get("shape_letters", {}).get("D"), "Прямоугольник")
+
+            wb = load_workbook(got_p, data_only=True)
+            ws = wb.active
+            patched = []
+            for r in range(20, 109):
+                patched.append((
+                    r,
+                    str(ws.cell(r, 15).value or ""),
+                    str(ws.cell(r, 17).value or ""),
+                ))
+            wb.close()
+            wb = load_workbook(got_p)
+            ws = wb.active
+            for r, naim, full in patched:
+                ws.cell(r, 15).value = naim.replace("Прямоугольник", "прямоуг.")
+                ws.cell(r, 17).value = full.replace("Прямоугольник", "прямоуг.")
+                ws.cell(r, 16).value = "шт."
+            wb.save(got_p)
+            wb.close()
+
+            second = learn_novye.process_inbox(
+                inbox, force=False, catalog_folder=catalog)
+            self.assertTrue(second["reports"], "должны переобучить, готовый изменился")
+            self.assertEqual(second.get("skipped"), [])
+            prof = core.load_yusuf_profile(catalog)
+            self.assertEqual(prof.get("unit"), "шт.")
+            self.assertEqual(prof.get("shape_letters", {}).get("D"), "прямоуг.")
+
+            extra = core.yusuf_dop_polya({
+                "collection": "ETNO",
+                "design": "9624A",
+                "color": "BURGUNDY / BURGUNDY",
+                "width": 200,
+                "length": 300,
+                "size_shape": "200 x 300 D",
+            }, profile=prof)
+            self.assertEqual(extra["unit"], "шт.")
+            self.assertEqual(extra["naim"], "ETNO 2*3 прямоуг.")
+            self.assertEqual(extra["full"], "Ковер ETNO 2*3 прямоуг.")
+        finally:
+            shutil.rmtree(inbox, ignore_errors=True)
+            shutil.rmtree(catalog, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()
