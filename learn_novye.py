@@ -30,7 +30,6 @@ import re
 import shutil
 import sys
 import time
-import zipfile
 
 import convert_nakladnaya as core
 from convert_nakladnaya import log
@@ -65,11 +64,10 @@ INSTRUCTION = """КАК РАБОТАТЬ
 
 3. Нажмите кнопку «Обучить».
 
-4. Готово. Появится новый файл Накладные_1.5.1.exe
-   и архив Накладные_1.5.1_для_сотрудника.zip
-   в C:\\Накладные. Архив можно сразу отправить коллеге:
-   внутри Накладные.exe и справочники. Закройте старое окно
-   и откройте Накладные_1.5.1.exe.
+4. Готово. Появится один файл Накладные_1.6.1.exe
+   в C:\\Накладные. Его можно сразу отправить коллеге:
+   все правила уже внутри, больше ничего не нужно.
+   Закройте старое окно и откройте этот файл.
 """
 
 
@@ -473,74 +471,47 @@ def _polozhit_spravochniki(dest, catalog_folder):
         core.save_yusuf_profile(core.load_yusuf_profile(catalog_folder), dest)
 
 
-def _tekst_dlya_sotrudnika(version):
-    return "\r\n".join([
-        "Накладные, версия %s" % version,
-        "",
-        "Это готовая сборка после обучения. Python ставить не нужно.",
-        "",
-        "Как поставить:",
-        "1. Распакуйте архив в папку (например C:\\Накладные).",
-        "2. Запустите Накладные.exe",
-        "",
-        "Файлы oboi_catalog.json и yusuf_profile.json должны лежать",
-        "рядом с Накладные.exe — не удаляйте их, в них правила обработки.",
-        "",
-        "Обычные накладные: положите в эту же папку и нажмите",
-        "«Обработать файлы».",
-        "",
-    ])
-
-
 def sobrat_paket_dlya_sotrudnika(catalog_folder, version, exe_src):
-    """
-    Собирает папку релиза и zip, который можно отправить сотруднику.
-    В архиве: Накладные.exe + справочники. exe_src — текущая программа.
-    """
+    """Один .exe со вшитыми справочниками — его отправляют сотруднику."""
     catalog_folder = os.path.abspath(catalog_folder)
+    dest = os.path.join(catalog_folder, "Накладные_%s.exe" % version)
+
+    oboi_path = os.path.join(catalog_folder, core.OBOI_CATALOG_FILENAME)
+    if os.path.exists(oboi_path):
+        with open(oboi_path, "r", encoding="utf-8") as f:
+            oboi = json.load(f)
+    else:
+        oboi = core.load_oboi_catalog(catalog_folder)
+
+    yusuf = core.load_yusuf_profile(catalog_folder)
+    core.vshit_overlay_v_exe(exe_src, dest, {
+        "version": version,
+        "oboi_catalog": oboi or {},
+        "yusuf_profile": yusuf or {},
+    })
+
     pack_dir = os.path.join(catalog_folder, "релизы", "Накладные_%s" % version)
     if os.path.isdir(pack_dir):
         shutil.rmtree(pack_dir)
     os.makedirs(pack_dir, exist_ok=True)
+    pack_exe = os.path.join(pack_dir, "Накладные.exe")
+    shutil.copy2(dest, pack_exe)
 
-    pack_exe_simple = os.path.join(pack_dir, "Накладные.exe")
-    shutil.copy2(exe_src, pack_exe_simple)
-    _polozhit_spravochniki(pack_dir, catalog_folder)
-    core.save_version(version, pack_dir)
-    readme = os.path.join(pack_dir, "ПРОЧТИТЕ.txt")
-    with open(readme, "w", encoding="utf-8") as f:
-        f.write(_tekst_dlya_sotrudnika(version))
-
-    zip_name = "Накладные_%s_для_сотрудника.zip" % version
-    zip_path = os.path.join(catalog_folder, zip_name)
-    if os.path.exists(zip_path):
-        os.remove(zip_path)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name in sorted(os.listdir(pack_dir)):
-            path = os.path.join(pack_dir, name)
-            if os.path.isfile(path):
-                zf.write(path, name)
-
-    log("Сборка для сотрудника: %s" % zip_path, "ok")
-    log("Папка сборки: %s" % pack_dir, "ok")
+    log("Один файл для сотрудника: %s" % dest, "ok")
     return {
         "version": version,
+        "exe": dest,
         "pack_dir": pack_dir,
-        "pack_exe": pack_exe_simple,
-        "zip": zip_path,
+        "pack_exe": pack_exe,
     }
 
 
 def vypustit_novyj_exe(catalog_folder, version):
     """
-    Копирует текущую программу в новый .exe с номером версии в имени
-    и собирает zip для отправки сотруднику.
-    Пока открыт старый файл, Windows не даёт его перезаписать — поэтому
-    новый файл всегда с другим именем: Накладные_1.5.1.exe
+    Собирает один Накладные_версия.exe со справочниками внутри.
+    Его можно отправить сотруднику. Старый открытый .exe не трогаем.
     """
     catalog_folder = os.path.abspath(catalog_folder)
-    name = "Накладные_%s.exe" % version
-    visible = os.path.join(catalog_folder, name)
 
     if getattr(sys, "frozen", False):
         src = os.path.abspath(sys.executable)
@@ -549,23 +520,22 @@ def vypustit_novyj_exe(catalog_folder, version):
             "Запустите Накладные.exe (не Python).", "warn")
         return None
 
-    shutil.copy2(src, visible)
     _polozhit_spravochniki(catalog_folder, catalog_folder)
     core.save_version(version, catalog_folder)
     pack = sobrat_paket_dlya_sotrudnika(catalog_folder, version, src)
 
+    name = os.path.basename(pack["exe"])
     bat = os.path.join(catalog_folder, "Открыть_Накладные_%s.bat" % version)
     with open(bat, "w", encoding="utf-8") as f:
         f.write("@echo off\r\n")
         f.write("start \"\" \"%~dp0%s\"\r\n" % name)
 
-    log("Новая программа у вас: %s" % visible, "ok")
+    log("Новая программа: %s" % pack["exe"], "ok")
     return {
         "version": version,
-        "exe": visible,
+        "exe": pack["exe"],
         "pack_dir": pack["pack_dir"],
         "pack_exe": pack["pack_exe"],
-        "zip": pack["zip"],
         "bat": bat,
     }
 
@@ -584,20 +554,12 @@ def zapisat_obnovlenie(reports, catalog_folder=None, release_info=None):
     ]
     if release_info and release_info.get("exe"):
         lines += [
-            "Новая программа у вас:",
+            "Один файл — отправьте сотруднику:",
             release_info["exe"],
             "",
-        ]
-        if release_info.get("zip"):
-            lines += [
-                "Отправить сотруднику этот архив:",
-                release_info["zip"],
-                "",
-                "Внутри: Накладные.exe и справочники. Распаковать и запустить.",
-                "",
-            ]
-        lines += [
-            "Закройте старое окно и откройте новый файл у себя.",
+            "Правила обработки уже внутри. Других файлов не нужно.",
+            "",
+            "Закройте старое окно и откройте этот файл у себя.",
             "Или двойной щелчок: %s" % os.path.basename(release_info.get("bat") or ""),
             "",
         ]
@@ -720,20 +682,12 @@ def process_inbox(folder=None, force=False, catalog_folder=None):
         if release_info:
             itog["new_exe"] = release_info["exe"]
             itog["pack_dir"] = release_info["pack_dir"]
-            itog["zip"] = release_info.get("zip")
             itog["done"].append({
-                "src": "релиз",
+                "src": "для сотрудника",
                 "out": release_info["exe"],
                 "rows": 0,
                 "type": "exe",
             })
-            if release_info.get("zip"):
-                itog["done"].append({
-                    "src": "для сотрудника",
-                    "out": release_info["zip"],
-                    "rows": 0,
-                    "type": "zip",
-                })
 
     itog["seconds"] = (datetime.datetime.now() - started).total_seconds()
     return itog

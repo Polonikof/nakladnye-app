@@ -34,6 +34,7 @@ import re
 import datetime
 import json
 import copy
+import struct
 import xlrd
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment
@@ -141,11 +142,12 @@ def app_dir():
 
 
 VERSION_FILENAME = "version.txt"
-BUILT_IN_VERSION = "1.5"
+BUILT_IN_VERSION = "1.6"
+EXE_OVERLAY_MAGIC = b"NAKLDY01"
 
 
 def current_version():
-    """Версия на диске (после «Обучить») или встроенная в сборку."""
+    """Версия на диске (после «Обучить»), из самого .exe или встроенная."""
     path = os.path.join(app_dir(), VERSION_FILENAME)
     if os.path.exists(path):
         try:
@@ -155,6 +157,9 @@ def current_version():
                 return v
         except Exception:
             pass
+    payload = chitat_overlay_exe()
+    if payload and payload.get("version"):
+        return str(payload["version"]).strip()
     return BUILT_IN_VERSION
 
 
@@ -178,6 +183,73 @@ def bump_patch(version):
         nums.append(0)
     nums[-1] += 1
     return ".".join(str(n) for n in nums)
+
+
+_overlay_cache = {}
+
+
+def otrezat_overlay_bytes(data):
+    """Убирает хвост со справочниками, если он уже был дописан к .exe."""
+    if not data or len(data) < 16:
+        return data
+    if data[-8:] != EXE_OVERLAY_MAGIC:
+        return data
+    length = struct.unpack_from("<Q", data, len(data) - 16)[0]
+    if length < 0 or 16 + length > len(data):
+        return data
+    return data[:len(data) - 16 - length]
+
+
+def chitat_overlay_exe(path=None):
+    """Справочники, вшитые в конец .exe. Без файла — текущая программа."""
+    if path is None:
+        if getattr(sys, "frozen", False):
+            path = os.path.abspath(sys.executable)
+        else:
+            return None
+    try:
+        st = os.stat(path)
+        key = (path, st.st_mtime, st.st_size)
+    except OSError:
+        return None
+    if key in _overlay_cache:
+        return _overlay_cache[key]
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        if len(data) < 16 or data[-8:] != EXE_OVERLAY_MAGIC:
+            _overlay_cache[key] = None
+            return None
+        length = struct.unpack_from("<Q", data, len(data) - 16)[0]
+        start = len(data) - 16 - length
+        if start < 0:
+            _overlay_cache[key] = None
+            return None
+        payload = json.loads(data[start:start + length].decode("utf-8"))
+        if not isinstance(payload, dict):
+            payload = None
+    except Exception:
+        payload = None
+    _overlay_cache[key] = payload
+    return payload
+
+
+def vshit_overlay_v_exe(src_path, dest_path, payload):
+    """Копирует .exe и дописывает в конец JSON со справочниками — один файл."""
+    with open(src_path, "rb") as f:
+        data = otrezat_overlay_bytes(f.read())
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    out = data + raw + struct.pack("<Q", len(raw)) + EXE_OVERLAY_MAGIC
+    dest_dir = os.path.dirname(os.path.abspath(dest_path))
+    if dest_dir:
+        os.makedirs(dest_dir, exist_ok=True)
+    tmp_path = dest_path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        f.write(out)
+    if os.path.exists(dest_path):
+        os.remove(dest_path)
+    os.rename(tmp_path, dest_path)
+    return dest_path
 
 
 def bundle_dir():
@@ -525,28 +597,48 @@ def yusuf_profile_path(folder=None):
     return external
 
 
+def _primenit_yusuf_data(profile, data):
+    if not isinstance(data, dict):
+        return profile
+    profile.update({k: v for k, v in data.items() if k != "shape_letters"})
+    letters = data.get("shape_letters") or {}
+    if isinstance(letters, dict):
+        merged = dict(YUSUF_SHAPE_DEFAULT)
+        merged.update({str(k).upper(): v for k, v in letters.items()})
+        profile["shape_letters"] = merged
+    headers = data.get("headers") or {}
+    if isinstance(headers, dict):
+        h = dict(default_yusuf_profile()["headers"])
+        h.update(headers)
+        profile["headers"] = h
+    return profile
+
+
 def load_yusuf_profile(folder=None):
     profile = default_yusuf_profile()
-    path = yusuf_profile_path(folder)
-    if not os.path.exists(path):
-        return profile
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            profile.update({k: v for k, v in data.items() if k != "shape_letters"})
-            letters = data.get("shape_letters") or {}
-            if isinstance(letters, dict):
-                merged = dict(YUSUF_SHAPE_DEFAULT)
-                merged.update({str(k).upper(): v for k, v in letters.items()})
-                profile["shape_letters"] = merged
-            headers = data.get("headers") or {}
-            if isinstance(headers, dict):
-                h = dict(default_yusuf_profile()["headers"])
-                h.update(headers)
-                profile["headers"] = h
-    except Exception:
-        pass
+    data = None
+    if folder is not None:
+        path = os.path.join(folder, YUSUF_PROFILE_FILENAME)
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = None
+    elif getattr(sys, "frozen", False):
+        payload = chitat_overlay_exe()
+        if payload and isinstance(payload.get("yusuf_profile"), dict):
+            data = payload["yusuf_profile"]
+    if data is None:
+        path = yusuf_profile_path(folder)
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = None
+    if data:
+        _primenit_yusuf_data(profile, data)
     return profile
 
 
@@ -1197,6 +1289,10 @@ def oboi_catalog_path(folder=None):
 
 
 def load_oboi_catalog(folder=None):
+    if folder is None and getattr(sys, "frozen", False):
+        payload = chitat_overlay_exe()
+        if payload and isinstance(payload.get("oboi_catalog"), dict):
+            return payload["oboi_catalog"]
     path = oboi_catalog_path(folder)
     if not os.path.exists(path):
         return {}

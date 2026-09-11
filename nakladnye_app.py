@@ -529,34 +529,26 @@ class App(tk.Tk):
             except Exception:
                 pass
             if exe:
-                self._append(f"Новая программа v{ver}:", "ok")
+                self._append(f"Один файл v{ver} — отправьте сотруднику:", "ok")
                 self._append(exe, "ok")
-                zip_path = itog.get("zip")
-                if zip_path:
-                    self._append("Архив для сотрудника:", "ok")
-                    self._append(zip_path, "ok")
-                    self._append("Отправьте этот zip коллеге: внутри Накладные.exe и справочники.", "muted")
-                self._append("Закройте это окно и откройте новый файл у себя.", "muted")
-                text = f"Готово. Сборка для сотрудника: {os.path.basename(zip_path or exe)}"
+                self._append("Правила уже внутри. Закройте это окно и откройте этот файл у себя.", "muted")
+                text = f"Готово. Отправьте сотруднику: {os.path.basename(exe)}"
                 kind = "ok"
-                highlight = zip_path or exe
                 try:
                     if sys.platform.startswith("win"):
                         subprocess.Popen(
-                            ["explorer", "/select,", os.path.abspath(highlight)]
+                            ["explorer", "/select,", os.path.abspath(exe)]
                         )
                     else:
-                        open_in_explorer(os.path.dirname(highlight))
+                        open_in_explorer(os.path.dirname(exe))
                 except Exception:
                     pass
-                msg = f"Новая программа у вас:\n{exe}\n"
-                if zip_path:
-                    msg += (
-                        f"\nОтправьте сотруднику архив:\n{zip_path}\n\n"
-                        "Он распаковывает zip и запускает Накладные.exe."
-                    )
-                msg += f"\n\nЗакройте это окно и откройте Накладные_{ver}.exe"
-                messagebox.showinfo(APP_NAME, msg)
+                messagebox.showinfo(
+                    APP_NAME,
+                    f"Один файл — отправьте сотруднику:\n\n{exe}\n\n"
+                    "Правила обработки уже внутри, других файлов не нужно.\n\n"
+                    f"Закройте это окно и откройте Накладные_{ver}.exe"
+                )
             else:
                 cat = itog.get("catalog_path") or ""
                 self._append(f"Справочник обновлён: {cat}", "ok")

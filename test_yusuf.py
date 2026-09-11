@@ -197,7 +197,7 @@ class YusufConvertTests(unittest.TestCase):
 
 
 class EmployeePackTests(unittest.TestCase):
-    def test_zip_contains_exe_and_catalogs(self):
+    def test_single_exe_contains_catalogs(self):
         catalog = tempfile.mkdtemp(prefix="pack_cat_")
         try:
             shutil.copy2(os.path.join(HERE, "oboi_catalog.json"),
@@ -206,21 +206,26 @@ class EmployeePackTests(unittest.TestCase):
                          os.path.join(catalog, core.YUSUF_PROFILE_FILENAME))
             fake_exe = os.path.join(catalog, "fake.exe")
             with open(fake_exe, "wb") as f:
-                f.write(b"MZ-fake-nakladnye")
+                f.write(b"MZ-fake-nakladnye" + b"\x00" * 64)
             info = learn_novye.sobrat_paket_dlya_sotrudnika(
-                catalog, "1.5.1", fake_exe)
-            self.assertTrue(os.path.isfile(info["zip"]))
-            self.assertTrue(info["zip"].endswith("Накладные_1.5.1_для_сотрудника.zip"))
-            import zipfile
-            with zipfile.ZipFile(info["zip"], "r") as zf:
-                names = set(zf.namelist())
-            self.assertIn("Накладные.exe", names)
-            self.assertIn("oboi_catalog.json", names)
-            self.assertIn("yusuf_profile.json", names)
-            self.assertIn("version.txt", names)
-            self.assertIn("ПРОЧТИТЕ.txt", names)
-            with zipfile.ZipFile(info["zip"], "r") as zf:
-                self.assertEqual(zf.read("Накладные.exe"), b"MZ-fake-nakladnye")
+                catalog, "1.6.1", fake_exe)
+            self.assertTrue(os.path.isfile(info["exe"]))
+            self.assertTrue(info["exe"].endswith("Накладные_1.6.1.exe"))
+            self.assertFalse(os.path.exists(
+                os.path.join(catalog, "Накладные_1.6.1_для_сотрудника.zip")))
+            payload = core.chitat_overlay_exe(info["exe"])
+            self.assertIsNotNone(payload)
+            self.assertEqual(payload.get("version"), "1.6.1")
+            self.assertIn("588058", payload.get("oboi_catalog") or {})
+            self.assertEqual(
+                (payload.get("yusuf_profile") or {}).get("unit"), "шт")
+            with open(info["exe"], "rb") as f:
+                data = f.read()
+            self.assertTrue(data.startswith(b"MZ-fake-nakladnye"))
+            # повторная вшивка не размножает хвост
+            core.vshit_overlay_v_exe(info["exe"], info["exe"], payload)
+            payload2 = core.chitat_overlay_exe(info["exe"])
+            self.assertEqual(payload2.get("version"), "1.6.1")
         finally:
             shutil.rmtree(catalog, ignore_errors=True)
 
